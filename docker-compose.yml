@@ -1,11 +1,10 @@
+version: "3.9"
 services:
   backend:
     build: .
     container_name: backend
     ports:
-      - "3000:3000"        # Map port 3000 trong container ra host
-    # env_file:
-    #   - .env               # Load biến môi trường từ file .env
+      - "3000:3000"
     environment:
       - PORT
       - MONGO_URI
@@ -13,15 +12,35 @@ services:
       - CLOUDINARY_API_KEY
       - CLOUDINARY_API_SECRET
       - JWT_SECRET
-    restart: always        # Tự khởi động lại khi container chết
+    restart: always
+    networks:
+      - photel-net
 
   nginx:
-      image: nginx:latest
-      container_name: nginx
-      ports:
-        - "80:80"            # Nginx lắng cổng 80
-      volumes:
-        - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      depends_on:
-        - backend
-      restart: always
+    image: nginx:latest
+    container_name: nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    restart: always
+    networks:
+      - photel-net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    command: tunnel run photel-tunnel   # Tên tunnel bạn đã tạo
+    volumes:
+      - ./cloudflared:/etc/cloudflared  # Chứa config.yml + credentials.json
+    depends_on:
+      - nginx
+    restart: always
+    networks:
+      - photel-net
+
+networks:
+  photel-net:
+    driver: bridge
