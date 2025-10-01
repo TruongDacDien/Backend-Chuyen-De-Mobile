@@ -32,9 +32,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
-    command: tunnel run photel-tunnel   # Tên tunnel bạn đã tạo
+    command: tunnel run my-tunnel   # Tên tunnel bạn đã tạo
     volumes:
-      - ./cloudflared:/etc/cloudflared  # Chứa config.yml + credentials.json
+      - ./cloudflared:/home/wsladmin/.cloudflared  # Chứa config.yml + credentials.json
     depends_on:
       - nginx
     restart: always
