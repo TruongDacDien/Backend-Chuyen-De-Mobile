@@ -17,4 +17,5 @@ COPY . .
 EXPOSE 3000
 
 # Chạy app
-CMD ["npm", "run dev"]
+CMD ["npm", "start"]
+
