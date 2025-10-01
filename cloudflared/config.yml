@@ -1,0 +1,7 @@
+tunnel: da7be253-84b5-46f3-8d21-d0a125506308
+credentials-file: /etc/cloudflared/da7be253-84b5-46f3-8d21-d0a125506308.json
+
+ingress:
+  - hostname: photel.io.vn
+    service: http://nginx:80
+  - service: http_status:404
