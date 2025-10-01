@@ -1,0 +1,9 @@
+services:
+  backend:
+    build: .
+    container_name: backend
+    ports:
+      - "3000:3000"        # Map port 3000 trong container ra host
+    env_file:
+      - .env               # Load biến môi trường từ file .env
+    restart: always        # Tự khởi động lại khi container chết
