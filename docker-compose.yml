@@ -27,9 +27,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
-    command: tunnel --config /home/wsladmin/.cloudflared/config.yml run
+    command: tunnel --config /etc/cloudflared/config.yml run
     volumes:
-      - ./cloudflared:/home/wsladmin/.cloudflared
+      - ./cloudflared:/etc/cloudflared
     depends_on:
       - nginx
     restart: always
