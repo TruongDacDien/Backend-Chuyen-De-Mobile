@@ -34,7 +34,7 @@ services:
     container_name: cloudflared
     command: tunnel run my-tunnel   # Tên tunnel bạn đã tạo
     volumes:
-      - ./cloudflared:/home/wsladmin/.cloudflared  # Chứa config.yml + credentials.json
+      - ./cloudflared:/etc/cloudflared  # Chứa config.yml + credentials.json
     depends_on:
       - nginx
     restart: always
