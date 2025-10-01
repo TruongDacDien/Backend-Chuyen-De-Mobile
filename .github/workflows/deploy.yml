@@ -1,0 +1,19 @@
+name: Deploy Backend with Docker
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build and Restart Docker Container
+        run: |
+          docker compose down
+          docker compose build
+          docker compose up -d
