@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: staging
-      url: https://<your-staging-url>
+      url: https://timeface-backend-staging.azurewebsites.net/
     steps:
       - name: Azure Login
         uses: azure/login@v2
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production
-      url: https://<your-production-url>
+      url: https://timeface-backend-prod.azurewebsites.net/
     steps:
       - name: Azure Login
         uses: azure/login@v2
