@@ -2,7 +2,9 @@
   "name": "api-app",
   "version": "1.0.0",
   "main": "index.js",
-  "engines": { "node": ">=18 <=22" }, 
+  "engines": {
+    "node": ">=18 <=22"
+  },
   "scripts": {
     "dev": "node index.js",
     "start": "node index.js",
@@ -23,6 +25,7 @@
     "express": "^5.1.0",
     "mongoose": "^8.14.2",
     "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.1"
+    "swagger-ui-express": "^5.0.1",
+    "typescript": "^5.9.3"
   }
 }
