@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "allowJs": true,           // Cho phép nạp file .js
+    "checkJs": true,           // (tuỳ chọn) Bật type-check cho .js
+    "noEmit": true,            // Chỉ kiểm tra, không xuất file
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "skipLibCheck": true
+  },
+  "include": [
+    "index.js",
+    "controllers/**/*.js",
+    "models/**/*.js",
+    "routes/**/*.js",
+    "services/**/*.js",
+    "swagger.js",
+    "testcicd.js"
+  ],
+  "exclude": ["node_modules", "dist"]
+}
