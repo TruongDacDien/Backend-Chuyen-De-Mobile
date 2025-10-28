@@ -2,10 +2,15 @@
   "name": "api-app",
   "version": "1.0.0",
   "main": "index.js",
+  "engines": { "node": ">=18 <=22" }, 
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "node index.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx",
+    "test": "jest --passWithNoTests",
+    "test:ci": "jest --ci --coverage"
   },
   "keywords": [],
   "author": "",
