@@ -9,8 +9,8 @@
     "dev": "node index.js",
     "start": "node index.js",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --ext .js",
     "test": "jest --passWithNoTests",
     "test:ci": "jest --ci --coverage"
   },
@@ -25,7 +25,10 @@
     "express": "^5.1.0",
     "mongoose": "^8.14.2",
     "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.1",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.2",
     "typescript": "^5.9.3"
   }
 }
