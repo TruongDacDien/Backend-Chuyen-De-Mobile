@@ -1,21 +1,22 @@
-# --- Base image
+# Dockerfile (ở root backend)
 FROM node:20-alpine AS base
 WORKDIR /app
 
-# Chỉ copy file manifest trước để tận dụng cache
+# 1) Cài deps bằng cache tốt
 COPY package*.json ./
-
-# Cài deps production
 RUN npm ci --omit=dev
 
-# Copy toàn bộ source vào image
+# 2) Copy source
 COPY . .
 
-# Tùy chọn: ép production
+# 3) Thiết lập runtime
 ENV NODE_ENV=production
-
-# App của bạn listen 3000
 EXPOSE 3000
 
-# Khởi động
+# (khuyến nghị) healthcheck cho Azure
+HEALTHCHECK --interval=30s --timeout=3s --retries=5 \
+  CMD wget -qO- http://localhost:3000/health || exit 1
+
+# 4) Start
 CMD ["npm", "start"]
+
