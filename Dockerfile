@@ -1,21 +1,21 @@
-# Sử dụng Node.js nhẹ (Alpine)
-FROM node:18-alpine
-
-# Thư mục làm việc trong container
+# ---- deps: cài prod deps tách lớp để cache nhanh
+FROM node:20-alpine AS deps
 WORKDIR /app
-
-# Copy package.json trước để cache dependencies
 COPY package*.json ./
+RUN npm ci --omit=dev
 
-# Cài dependencies
-RUN npm install --production
-
-# Copy toàn bộ source code vào container
+# ---- builder: build source (TS -> dist)
+FROM node:20-alpine AS builder
+WORKDIR /app
 COPY . .
+RUN npm ci
+RUN npm run build
 
-# Mở port (ví dụ 3000, nếu app bạn dùng khác thì chỉnh)
+# ---- runner: ảnh chạy thật sự, nhẹ
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
 EXPOSE 3000
-
-# Chạy app
-CMD ["npm", "start"]
-
+CMD ["node", "dist/index.js"]
