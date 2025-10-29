@@ -14,7 +14,7 @@ RUN npm ci
 
 # Copy cấu hình TS + source
 COPY tsconfig*.json ./
-COPY src ./src
+COPY . .
 
 # Build ra dist
 RUN npm run build
