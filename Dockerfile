@@ -17,7 +17,7 @@ COPY tsconfig*.json ./
 COPY . .
 
 # Build ra dist
-RUN npm run build
+RUN npm run lint
 
 # (tuỳ chọn) kiểm tra dist có thật
 RUN ls -la dist
