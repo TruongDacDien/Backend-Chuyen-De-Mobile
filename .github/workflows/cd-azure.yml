@@ -1,100 +1,111 @@
-name: CD (Azure single container)
+name: CD (Azure, GHCR)
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch:
-
-concurrency:
-  group: cd-azure-${{ github.ref }}
-  cancel-in-progress: true
+    branches: [ main ]
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
-
-env:
-  # Registry + image name (GHCR). Ví dụ: ghcr.io/OWNER/REPO/backend
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/backend
+  packages: write   # cần để push GHCR
+  id-token: write   # để azure/login OIDC (nếu bạn dùng)
 
 jobs:
-  build_and_push:
-    name: Build & Push Docker image to GHCR
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      image_uri: ${{ steps.meta.outputs.tags }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # (Tùy chọn) nếu dùng private submodules → thêm steps auth tại đây
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            # tag theo commit
-            type=raw,value=sha-${{ github.sha }}
-            # tag tiện cho môi trường staging
-            type=raw,value=staging-latest
-
-      - name: Build and push image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  deploy_staging:
-    name: Deploy to Azure Staging
-    needs: build_and_push
+  build-and-deploy-staging:
     runs-on: ubuntu-latest
     environment:
       name: staging
-      # (tuỳ chọn) đặt URL staging tại Settings → Environments → staging
+      url: https://timeface-backend-staging.azurewebsites.net
     steps:
+      - uses: actions/checkout@v4
+
+      # (Nếu có build step node, thêm tại đây — không bắt buộc cho container)
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push image (staging)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY }}/${{ secrets.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ secrets.REGISTRY }}/${{ secrets.IMAGE_NAME }}:staging-latest
+
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}   # SPN JSON
 
-      - name: Deploy container image (staging)
+      # Đảm bảo App Settings tối thiểu trên App Service (1 lần/ hoặc mỗi deploy tuỳ bạn)
+      - name: Set App Settings (staging)
+        run: |
+          az webapp config appsettings set \
+            --resource-group ${{ secrets.AZURE_RG }} \
+            --name ${{ secrets.AZURE_WEBAPP_STAGING }} \
+            --settings PORT=3000 WEBSITES_PORT=3000 WEBSITES_CONTAINER_START_TIME_LIMIT=1800 \
+                       MONGO_URI='${{ secrets.MONGO_URI }}' \
+                       JWT_SECRET='${{ secrets.JWT_SECRET }}' \
+                       CLOUDINARY_CLOUD_NAME='${{ secrets.CLOUDINARY_CLOUD_NAME }}' \
+                       CLOUDINARY_API_KEY='${{ secrets.CLOUDINARY_API_KEY }}' \
+                       CLOUDINARY_API_SECRET='${{ secrets.CLOUDINARY_API_SECRET }}'
+        shell: bash
+
+      - name: Deploy to Azure WebApp (staging)
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{ secrets.AZURE_WEBAPP_STAGING }}
-          # Dùng cùng artifact bằng digest để đảm bảo Staging/Prod “giống hệt”
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build_and_push.outputs.digest }}
+          app-name: ${{ secrets.AZURE_WEBAPP_STAGING }}     # ví dụ: timeface-backend-staging
+          images: ${{ secrets.REGISTRY }}/${{ secrets.IMAGE_NAME }}:staging-latest
 
-  deploy_production:
-    name: Deploy to Azure Production (needs approval)
-    needs: [build_and_push, deploy_staging]
+  build-and-deploy-prod:
+    needs: build-and-deploy-staging
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: production
-      # Bật Required reviewers trong Environments → production để có nút Approve
+      url: https://timeface-backend-prod.azurewebsites.net
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push image (prod)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY }}/${{ secrets.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ secrets.REGISTRY }}/${{ secrets.IMAGE_NAME }}:prod-latest
+
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy container image (prod)
+      - name: Set App Settings (prod)
+        run: |
+          az webapp config appsettings set \
+            --resource-group ${{ secrets.AZURE_RG }} \
+            --name ${{ secrets.AZURE_WEBAPP_PROD }} \
+            --settings PORT=3000 WEBSITES_PORT=3000 WEBSITES_CONTAINER_START_TIME_LIMIT=1800
+        shell: bash
+
+      - name: Deploy to Azure WebApp (prod)
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{ secrets.AZURE_WEBAPP_PROD }}
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build_and_push.outputs.digest }}
+          app-name: ${{ secrets.AZURE_WEBAPP_PROD }}         # ví dụ: timeface-backend-prod
+          images: ${{ secrets.REGISTRY }}/${{ secrets.IMAGE_NAME }}:prod-latest
