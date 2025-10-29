@@ -16,11 +16,8 @@ RUN npm ci
 COPY tsconfig*.json ./
 COPY . .
 
-# Build ra dist
+# Build
 RUN npm run lint
-
-# (tuỳ chọn) kiểm tra dist có thật
-RUN ls -la dist
 
 # ---- runner: ảnh chạy thật
 FROM node:20-alpine AS runner
