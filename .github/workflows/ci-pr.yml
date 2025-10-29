@@ -1,30 +1,40 @@
 name: CI (PR checks)
 
 on:
-  pull_request:
-    branches: [main, develop]
-    paths-ignore:
-      - '**/*.md'
+  push:
+    branches: [ dev, main ]
 
-concurrency:
-  group: pr-${{ github.ref }}
-  cancel-in-progress: true
+# concurrency:
+#   group: pr-${{ github.ref }}
+#   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  quality:
+  checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Use Node.js 20
+      # (Tuỳ chọn) ép nguồn PR phải là feature/*
+      - name: Enforce source branch naming
+        if: ${{ github.base_ref == 'dev' }}
+        run: |
+          echo "HEAD: $GITHUB_HEAD_REF"
+          if ! [[ "$GITHUB_HEAD_REF" =~ ^feature\/.+$ ]]; then
+            echo "::error ::PR to 'dev' must come from 'feature/*' branch."
+            exit 1
+          fi
+
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
           cache: 'npm'
+          # nếu backend ở root:
+          cache-dependency-path: package-lock.json
 
       - name: Install (clean)
         run: npm ci
@@ -38,9 +48,9 @@ jobs:
       - name: Unit tests
         run: npm run test:ci
 
-      - name: Upload coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-${{ github.run_id }}
-          path: coverage
+      # - name: Upload coverage
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: coverage-${{ github.run_id }}
+      #     path: coverage
