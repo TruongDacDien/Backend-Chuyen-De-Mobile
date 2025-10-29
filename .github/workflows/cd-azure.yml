@@ -2,7 +2,7 @@ name: CD (Azure, GHCR)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ dev, main ]
 
 permissions:
   contents: read
@@ -11,10 +11,14 @@ permissions:
 
 jobs:
   build-and-deploy-staging:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     environment:
       name: staging
       url: https://timeface-backend-staging.azurewebsites.net
+    
+    # 👇 Tên job này sẽ xuất hiện như 1 “required check” có tên "build-and-deploy-staging"
+    name: build-and-deploy-staging
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +48,7 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}   # SPN JSON
 
       # Đảm bảo App Settings tối thiểu trên App Service (1 lần/ hoặc mỗi deploy tuỳ bạn)
-      - name: Set App Settings (staging)
+      - name: Ensure App Settings (staging)
         run: |
           az webapp config appsettings set \
             --resource-group ${{ secrets.AZURE_RG }} \
@@ -64,7 +68,6 @@ jobs:
           images: ${{ secrets.REGISTRY }}/${{ secrets.IMAGE_NAME }}:staging-latest
 
   build-and-deploy-prod:
-    needs: build-and-deploy-staging
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
@@ -96,7 +99,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set App Settings (prod)
+      - name: Ensure App Settings (prod)
         run: |
           az webapp config appsettings set \
             --resource-group ${{ secrets.AZURE_RG }} \
