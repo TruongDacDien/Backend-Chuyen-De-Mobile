@@ -1,9 +1,13 @@
-name: CD (Azure, GHCR)
+name: CD (Azure single container)
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: cd-azure-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -11,36 +15,42 @@ permissions:
   id-token: write
 
 env:
-  REGISTRY: ${{ secrets.REGISTRY }}
-  IMAGE_NAME: ${{ secrets.IMAGE_NAME }}
+  # Registry + image name (GHCR). Ví dụ: ghcr.io/OWNER/REPO/backend
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/backend
 
 jobs:
   build_and_push:
-    name: Build & Push Image
+    name: Build & Push Docker image to GHCR
     runs-on: ubuntu-latest
     outputs:
-      image: ${{ steps.meta.outputs.tags }}
       digest: ${{ steps.build.outputs.digest }}
+      image_uri: ${{ steps.meta.outputs.tags }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Log in to GHCR
+      # (Tùy chọn) nếu dùng private submodules → thêm steps auth tại đây
+
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
+      - name: Extract Docker metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            # tag theo commit
             type=raw,value=sha-${{ github.sha }}
+            # tag tiện cho môi trường staging
             type=raw,value=staging-latest
 
-      - name: Build and push
+      - name: Build and push image
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -51,38 +61,39 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
   deploy_staging:
-    name: Deploy to Staging (Azure)
+    name: Deploy to Azure Staging
     needs: build_and_push
     runs-on: ubuntu-latest
     environment:
       name: staging
-      url: https://timeface-backend-staging.azurewebsites.net/
+      # (tuỳ chọn) đặt URL staging tại Settings → Environments → staging
     steps:
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy container to WebApp (staging)
+      - name: Deploy container image (staging)
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ secrets.AZURE_WEBAPP_STAGING }}
+          # Dùng cùng artifact bằng digest để đảm bảo Staging/Prod “giống hệt”
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build_and_push.outputs.digest }}
 
   deploy_production:
-    name: Deploy to Production (Azure, needs approval)
+    name: Deploy to Azure Production (needs approval)
     needs: [build_and_push, deploy_staging]
     runs-on: ubuntu-latest
     environment:
       name: production
-      url: https://timeface-backend-prod.azurewebsites.net/
+      # Bật Required reviewers trong Environments → production để có nút Approve
     steps:
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy container to WebApp (prod)
+      - name: Deploy container image (prod)
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ secrets.AZURE_WEBAPP_PROD }}
