@@ -10,14 +10,28 @@ const options = {
     },
     servers: [
       {
-        url: "/", // 👈 Sử dụng chính domain của backend server
+        url: "/", // sử dụng domain backend
         description: "Dynamic base URL (used automatically by Swagger UI)",
       },
     ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+        },
+      },
+    },
+    security: [
+      {
+        bearerAuth: [],
+      },
+    ],
   },
-  apis: ["./routes/*.js"], // nơi chứa mô tả Swagger
+  apis: ["./routes/*.js"],
 };
 
-const swaggerSpec = swaggerJSDoc(options);
+const swaggerSpec = require("swagger-jsdoc")(options);
 
 module.exports = swaggerSpec;
