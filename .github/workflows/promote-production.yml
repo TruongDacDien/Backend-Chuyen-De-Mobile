@@ -1,4 +1,4 @@
-name: Promote Staging to Master
+name: Promote Staging to Main
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  create_pr:
+  create_pr_to_main:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout staging
@@ -17,12 +17,12 @@ jobs:
         with:
           ref: staging
 
-      - name: Create PR to master
+      - name: Create PR to main
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           base: main
-          branch: auto/promote-staging-to-master
-          title: "Promote staging to master"
+          branch: auto/promote-staging-to-main
+          title: "Promote staging to main"
           body: "Ready for production release after staging approval."
           delete-branch: true
