@@ -1,9 +1,8 @@
 name: Promote Dev to Staging
 
 on:
-  workflow_run:
-    workflows: ["CI - PR to Dev"]
-    types: [completed]
+  push:
+    branches: ["dev"]
 
 permissions:
   contents: write
@@ -11,16 +10,13 @@ permissions:
 
 jobs:
   create_pr:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout dev
         uses: actions/checkout@v4
         with:
           ref: dev
 
-      # Tạo PR dev -> staging tự động
       - name: Create PR to staging
         uses: peter-evans/create-pull-request@v6
         with:
@@ -28,5 +24,5 @@ jobs:
           base: staging
           branch: auto/promote-dev-to-staging
           title: "Promote dev to staging"
-          body: "Auto PR after successful CI for PRs into dev."
+          body: "Auto PR when dev is updated."
           delete-branch: true
