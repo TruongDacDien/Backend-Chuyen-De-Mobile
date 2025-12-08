@@ -1,4 +1,3 @@
-// controllers/auth.controller.js
 const User = require("../models/user.model");
 const Company = require("../models/company.model");
 const jwt = require("jsonwebtoken");
@@ -14,7 +13,7 @@ function ok(res, data = {}, message) {
   });
 }
 
-function err(res, status = 400, message = "Bad request") {
+function err(res, status = 400, message = "Yêu cầu không hợp lệ") {
   return res.status(status).json({
     success: false,
     error: message,
@@ -25,12 +24,14 @@ function generateVerifyCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-/** Tạo/return company theo thông tin bắt buộc */
+// ============================
+// CREATE COMPANY
+// ============================
 async function createCompanyFromBody(body) {
   const { company_name, company_address, company_email, company_phone } = body;
 
   if (!company_name || !company_address || !company_email || !company_phone) {
-    throw new Error("company_name, company_address, company_email, company_phone are required");
+    throw new Error("Thiếu thông tin công ty bắt buộc");
   }
 
   const existed = await Company.findOne({
@@ -44,34 +45,34 @@ async function createCompanyFromBody(body) {
 
   if (existed) return existed;
 
-  const company = await Company.create({
+  return Company.create({
     name: company_name,
     code: company_name.toLowerCase().replace(/\s+/g, "-"),
     address: company_address,
     contact_email: company_email,
     contact_phone: company_phone,
-    avatar: body.company_avatar || undefined,
+    avatar: body.company_avatar,
     images: Array.isArray(body.company_images) ? body.company_images : [],
   });
-
-  return company;
 }
 
-/** tạo user không gửi mail, có thể chọn verify luôn */
+// ============================
+// REGISTER (NO VERIFY SERVICE)
+// ============================
 async function registerNoVerifyService(input) {
   const { email, password, full_name } = input;
 
   let existed = await User.findOne({ email });
   if (existed) return existed;
 
-  const user = await User.create({
+  return User.create({
     email,
     password,
     full_name,
     role: "admin",
-    company_id: input.company_id || null,   // ⬅️ set company cho user
-    department_id: input.department_id || null,
-    manager_id: input.manager_id || null,
+    company_id: input.company_id,
+    department_id: input.department_id,
+    manager_id: input.manager_id,
     job_title: input.job_title,
     salary: input.salary,
     face_id: input.face_id,
@@ -79,12 +80,10 @@ async function registerNoVerifyService(input) {
     gallery: input.gallery || [],
     is_verified: input.is_verified ?? true,
   });
-
-  return user;
 }
 
 module.exports = {
-  // 🔐 Đăng ký (có verify) — bắt buộc cả thông tin công ty, gán company_id cho user
+  // 🔐 REGISTER + COMPANY
   register: async (req, res) => {
     try {
       const {
@@ -98,103 +97,99 @@ module.exports = {
       } = req.body;
 
       if (!email || !password || !full_name || !company_name || !company_address || !company_email || !company_phone) {
-        return err(res, 400, "email, password, full_name, company_name, company_address, company_email, company_phone are required");
+        return err(res, 400, "Thiếu dữ liệu bắt buộc");
       }
 
       const code = generateVerifyCode();
       const expires = new Date(Date.now() + 15 * 60 * 1000);
 
-      // tạo/nhận company trước để có _id
       const company = await createCompanyFromBody(req.body);
 
-      let user = await User.findOne({ email });
+      let user = await User.findOne({ email }).select("+password");
 
-      if (user && user.is_verified) return err(res, 400, "Email already exists");
+      if (user && user.is_verified) {
+        return err(res, 400, "Email đã tồn tại");
+      }
 
       if (user && !user.is_verified) {
-        // update user cũ
         user.password = password;
         user.full_name = full_name;
         user.role = "admin";
-        user.company_id = user.company_id || company._id; // ⬅️ gán nếu chưa có
+        user.company_id = user.company_id || company._id;
         user.is_verified = false;
         user.verification_code = code;
         user.verification_expires = expires;
         await user.save();
-      } else if (!user) {
-        // tạo mới
+      } else {
         user = await User.create({
           email,
           password,
           full_name,
           role: "admin",
-          company_id: company._id,          // ⬅️ gán company cho user mới
+          company_id: company._id,
           is_verified: false,
           verification_code: code,
           verification_expires: expires,
         });
       }
 
-      // gửi mail verify
+      // SEND EMAIL
       await mailFacade.sendMail({
         toList: [user.email],
-        subject: "Xác nhận tài khoản của bạn",
-        html: `
-          <p>Chào ${user.full_name || ""},</p>
-          <p>Mã xác nhận tài khoản của bạn là:</p>
-          <h2>${code}</h2>
-          <p>Mã sẽ hết hạn sau 15 phút.</p>
-        `,
+        subject: "Mã xác nhận tài khoản",
+        html: `<p>Xin chào ${user.full_name || ""},</p>
+               <p>Mã xác nhận của bạn:</p>
+               <h2>${code}</h2>
+               <p>Hiệu lực 15 phút.</p>`,
       });
 
       return ok(
         res,
         { userId: user._id, companyId: company._id },
-        "Đăng ký thành công, vui lòng kiểm tra email để nhập mã xác nhận."
+        "Đăng ký thành công, vui lòng kiểm tra email."
       );
     } catch (e) {
-      console.error("Register error:", e);
-      return err(res, 400, e?.message || "Register failed");
+      console.error("Lỗi đăng ký:", e);
+      return err(res, 400, e?.message || "Đăng ký thất bại");
     }
   },
 
-  // ✅ Đăng ký không verify (test) — tạo company + gán company_id cho user
+  // ⭐ REGISTER NO VERIFY
   registerNoVerify: async (req, res) => {
     try {
       const { company_name, company_address, company_email, company_phone } = req.body;
+
       if (!company_name || !company_address || !company_email || !company_phone)
-        return err(res, 400, "company_name, company_address, company_email, company_phone are required");
+        return err(res, 400, "Thiếu thông tin công ty");
 
       const company = await createCompanyFromBody(req.body);
 
       const user = await registerNoVerifyService({
         ...req.body,
-        company_id: company._id, // ⬅️ gán luôn
+        company_id: company._id,
         is_verified: true,
       });
 
-      // nếu user đã tồn tại từ trước (existed), có thể còn thiếu company_id → đảm bảo gán
       if (!user.company_id) {
         user.company_id = company._id;
         await user.save();
       }
 
-      return ok(res, { user, companyId: company._id }, "Register (no verify) success");
+      return ok(res, { user, companyId: company._id }, "Tạo tài khoản thành công");
     } catch (e) {
-      console.error("RegisterNoVerify error:", e);
-      return err(res, 400, e?.message || "Register (no verify) failed");
+      return err(res, 400, e?.message);
     }
   },
 
-  // 📩 resend mã OTP
+  // 📤 RESEND OTP
   resendCode: async (req, res) => {
     try {
       const { email } = req.body;
-      if (!email) return err(res, 400, "Email is required");
+      if (!email) return err(res, 400, "Email là bắt buộc");
 
       const user = await User.findOne({ email, record_status: 1 });
-      if (!user) return err(res, 400, "User not found");
-      if (user.is_verified) return err(res, 400, "Account already verified");
+      if (!user) return err(res, 400, "Không tìm thấy người dùng");
+      if (user.is_verified) return err(res, 400, "Tài khoản đã xác minh");
 
       const code = generateVerifyCode();
       const expires = new Date(Date.now() + 15 * 60 * 1000);
@@ -205,147 +200,134 @@ module.exports = {
 
       await mailFacade.sendMail({
         toList: [user.email],
-        subject: "Mã xác nhận tài khoản (gửi lại)",
-        html: `
-          <p>Chào ${user.full_name || ""},</p>
-          <p>Mã xác nhận tài khoản mới của bạn là:</p>
-          <h2>${code}</h2>
-          <p>Mã sẽ hết hạn sau 15 phút.</p>
-        `,
+        subject: "Mã xác nhận mới",
+        html: `<p>Mã mới của bạn:</p><h2>${code}</h2>`,
       });
 
-      return ok(res, null, "Resend verification code success");
+      return ok(res, null, "Đã gửi lại mã xác nhận");
     } catch (e) {
-      console.error("Resend code error:", e);
-      return err(res, 400, e?.message || "Resend code failed");
+      return err(res, 400, e?.message);
     }
   },
 
-  // 🔑 login
-// 🔑 login (lấy subscription từ Company)
-login: async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password)
-      return err(res, 400, "email and password are required");
+  // 🔑 LOGIN (FULL FIX PASSWORD)
+  login: async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password)
+        return err(res, 400, "Email và mật khẩu là bắt buộc");
 
-    // 👉 tìm user + populate company + subscription_plan
-    const user = await User.findOne({ email, record_status: 1 })
-      .populate({
-        path: "company_id",
-        select: "name code subscription_plan subscription_status",
-        populate: {
-          path: "subscription_plan",
-          model: "SubscriptionPlan",
+      const user = await User.findOne({ email, record_status: 1 })
+        .select("+password") // ❗ FIX BẮT BUỘC
+        .populate({
+          path: "company_id",
+          select: "name code subscription_plan subscription_status",
+          populate: { path: "subscription_plan", model: "SubscriptionPlan" },
+        });
+
+      if (!user) return err(res, 400, "Không tìm thấy người dùng");
+      if (!user.is_active) return err(res, 403, "Tài khoản đã bị vô hiệu hóa");
+      if (!user.is_verified) return err(res, 403, "Tài khoản chưa xác minh");
+
+      const okPw = await user.comparePassword(password);
+      if (!okPw) return err(res, 400, "Mật khẩu không đúng");
+
+      const token = jwt.sign(
+        { id: user._id, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      const userObj = user.toObject();
+      delete userObj.password;
+
+      const company = userObj.company_id;
+
+      return ok(
+        res,
+        {
+          token,
+          user: {
+            ...userObj,
+            company_id: company,
+            subscription_plan: company?.subscription_plan || null,
+            subscription_status: company?.subscription_status || "unactive",
+          },
         },
-      });
+        "Đăng nhập thành công"
+      );
+    } catch (e) {
+      return err(res, 400, "Đăng nhập thất bại");
+    }
+  },
 
-    if (!user) return err(res, 400, "User not found");
-    if (!user.is_verified) return err(res, 403, "Account is not verified");
-    // @ts-ignore
-    const okPw = await user.comparePassword(password);
-    if (!okPw) return err(res, 400, "Incorrect password");
-
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    const userObj = user.toObject();
-
-    // 👇 Lấy sub từ company
-    const company = userObj.company_id || null;
-    const subscription_plan = company?.subscription_plan || null;
-    const subscription_status = company?.subscription_status || "unactive";
-
-    return ok(res, {
-      token,
-      user: {
-        ...userObj,
-        company_id: company,            // đã include subscription_* bên trong
-        subscription_plan,              // tiện FE đọc trực tiếp
-        subscription_status,
-      },
-    });
-  } catch (e) {
-    console.error("Login error:", e);
-    return err(res, 400, e?.message || "Login failed");
-  }
-},
-
-
-  // ✔ verify tài khoản bằng mã
+  // ✔ VERIFY ACCOUNT
   verifyAccount: async (req, res) => {
     try {
       const { email, code } = req.body;
-      if (!email || !code) return err(res, 400, "email and code are required");
+      if (!email || !code) return err(res, 400, "Thiếu dữ liệu");
 
-      const user = await User.findOne({ email, record_status: 1 });
-      if (!user) return err(res, 400, "User not found");
-      if (user.is_verified) return err(res, 400, "Account already verified");
+      const user = await User.findOne({ email, record_status: 1 }).select("+password");
+      if (!user) return err(res, 400, "Không tìm thấy người dùng");
+      if (user.is_verified) return err(res, 400, "Tài khoản đã xác minh");
 
-      if (!user.verification_code || !user.verification_expires)
-        return err(res, 400, "No verification code, please register again");
-
+      if (!user.verification_code) return err(res, 400, "Không có mã xác nhận");
       if (user.verification_expires < new Date())
-        return err(res, 400, "Verification code expired");
+        return err(res, 400, "Mã xác nhận đã hết hạn");
 
       if (user.verification_code !== code)
-        return err(res, 400, "Verification code invalid");
+        return err(res, 400, "Mã xác nhận không đúng");
 
       user.is_verified = true;
       user.verification_code = null;
       user.verification_expires = null;
       await user.save();
 
-      return ok(res, null, "Account verified successfully");
+      return ok(res, null, "Xác minh tài khoản thành công");
     } catch (e) {
-      console.error("Verify error:", e);
-      return err(res, 400, e?.message || "Verify failed");
+      return err(res, 400, e?.message);
     }
   },
- // ====== MỚI: Đổi mật khẩu (yêu cầu token) ======
+
+  // 🔐 CHANGE PASSWORD
   changePassword: async (req, res) => {
     try {
       const userId = req.user?.id;
       const { old_password, new_password } = req.body;
 
-      if (!userId) return err(res, 401, "Unauthorized");
+      if (!userId) return err(res, 401, "Không có quyền");
       if (!old_password || !new_password)
-        return err(res, 400, "old_password and new_password are required");
-      if (old_password === new_password)
-        return err(res, 400, "New password must be different from old password");
+        return err(res, 400, "Thiếu mật khẩu");
 
-      const user = await User.findOne({ _id: userId, record_status: 1 });
-      if (!user) return err(res, 404, "User not found");
+      const user = await User.findById(userId).select("+password");
+      if (!user) return err(res, 404, "Không tìm thấy người dùng");
 
-      // @ts-ignore
       const okPw = await user.comparePassword(old_password);
-      if (!okPw) return err(res, 400, "Old password is incorrect");
+      if (!okPw) return err(res, 400, "Mật khẩu cũ không đúng");
 
-      user.password = new_password; // giả định user.model có pre-save hash
+      if (old_password === new_password)
+        return err(res, 400, "Mật khẩu mới phải khác");
+
+      user.password = new_password;
       await user.save();
 
-      return ok(res, null, "Password changed successfully");
+      return ok(res, null, "Đổi mật khẩu thành công");
     } catch (e) {
-      console.error("ChangePassword error:", e);
-      return err(res, 400, e?.message || "Change password failed");
+      return err(res, 400, e?.message);
     }
   },
 
-  // ====== MỚI: Quên mật khẩu — gửi mã ======
+  // 📩 FORGOT PASSWORD
   forgotPassword: async (req, res) => {
     try {
       const { email } = req.body;
-      if (!email) return err(res, 400, "Email is required");
+      if (!email) return err(res, 400, "Email bắt buộc");
 
       const user = await User.findOne({ email, record_status: 1 });
-      // Trả về 200 để tránh lộ tồn tại email, nhưng ở đây bạn đang trả message rõ ràng — tùy bạn:
-      if (!user) return ok(res, null, "If the email exists, a reset code has been sent");
+      if (!user) return ok(res, null, "Nếu tài khoản tồn tại, mã sẽ được gửi");
 
-      // chỉ cho user đã verify mới reset
-      if (!user.is_verified) return err(res, 403, "Account is not verified");
+      if (!user.is_verified)
+        return err(res, 403, "Tài khoản chưa xác minh");
 
       const code = generateVerifyCode();
       const expires = addMinutes(new Date(), 15);
@@ -357,58 +339,53 @@ login: async (req, res) => {
       await mailFacade.sendMail({
         toList: [user.email],
         subject: "Mã đặt lại mật khẩu",
-        html: `
-          <p>Chào ${user.full_name || ""},</p>
-          <p>Mã đặt lại mật khẩu của bạn là:</p>
-          <h2>${code}</h2>
-          <p>Mã sẽ hết hạn sau 15 phút.</p>
-        `,
+        html: `<h2>${code}</h2>`,
       });
 
-      return ok(res, null, "Reset code sent to email");
+      return ok(res, null, "Đã gửi mã đặt lại");
     } catch (e) {
-      console.error("ForgotPassword error:", e);
-      return err(res, 400, e?.message || "Forgot password failed");
+      return err(res, 400, e?.message);
     }
   },
 
-  // ====== MỚI: Xác nhận code & đặt mật khẩu mới ======
+  // 🔁 RESET PASSWORD
   resetPassword: async (req, res) => {
     try {
       const { email, code, new_password } = req.body;
+
       if (!email || !code || !new_password)
-        return err(res, 400, "email, code and new_password are required");
+        return err(res, 400, "Thiếu dữ liệu");
 
-      const user = await User.findOne({ email, record_status: 1 });
-      if (!user) return err(res, 400, "User not found");
+      const user = await User.findOne({ email, record_status: 1 }).select("+password");
 
-      if (!user.reset_password_code || !user.reset_password_expires)
-        return err(res, 400, "No reset request or code already used");
+      if (!user) return err(res, 400, "Không tìm thấy người dùng");
+      if (!user.reset_password_code)
+        return err(res, 400, "Không có yêu cầu đặt lại");
 
       if (user.reset_password_expires < new Date())
-        return err(res, 400, "Reset code expired");
+        return err(res, 400, "Mã đã hết hạn");
 
       if (user.reset_password_code !== code)
-        return err(res, 400, "Reset code invalid");
+        return err(res, 400, "Mã không đúng");
 
-      // không cho new_password trùng mật khẩu cũ
-      // @ts-ignore
       const sameAsOld = await user.comparePassword(new_password);
-      if (sameAsOld) return err(res, 400, "New password must be different from old password");
+      if (sameAsOld)
+        return err(res, 400, "Mật khẩu mới phải khác");
 
-      user.password = new_password; // pre-save hash
+      user.password = new_password;
       user.reset_password_code = null;
       user.reset_password_expires = null;
       await user.save();
 
-      return ok(res, null, "Password has been reset");
+      return ok(res, null, "Đặt lại mật khẩu thành công");
     } catch (e) {
-      console.error("ResetPassword error:", e);
-      return err(res, 400, e?.message || "Reset password failed");
+      return err(res, 400, e?.message);
     }
   },
+
   registerNoVerifyService,
 };
+
 function addMinutes(date, mins) {
   return new Date(date.getTime() + mins * 60 * 1000);
 }

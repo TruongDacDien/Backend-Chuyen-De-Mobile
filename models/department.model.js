@@ -4,6 +4,15 @@ const mongoose = require("mongoose");
 const departmentSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
+
+    // ⭐ mã phòng ban
+    department_code: {
+      type: String,
+      required: true,
+      unique: true, // đảm bảo không trùng
+      trim: true,
+    },
+
     manager_id: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // trưởng phòng
     users: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],    // list user thuộc phòng
 

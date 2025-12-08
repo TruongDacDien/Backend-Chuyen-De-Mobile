@@ -20,7 +20,7 @@ const authRoutes = require("./routes/auth.routes");
 const userRoutes = require("./routes/user.routes");
 const departmentRoutes = require("./routes/department.routes");
 const sysTestRoutes = require("./routes/sysTest.routes");
-
+const googleMapsRoutes = require("./routes/googleMaps.route");
 const app = express();
 
 /* ---------------------- MONGO CONNECT ---------------------- */
@@ -62,7 +62,7 @@ app.use("/api/ping", pingRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/momo", momoRoutes);
 app.use("/api/zalo", zaloRoutes);
-
+app.use("/api/maps", googleMapsRoutes);
 app.use("/api/notify", notificationRoutes);
 app.use("/api/plans", subscriptionPlanRoutes);
 app.use("/api/company", companyRoutes);

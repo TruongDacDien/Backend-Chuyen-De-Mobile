@@ -3,7 +3,7 @@ const RoleHandler = require("../RoleHandler");
 
 class SysAdminHandler extends RoleHandler {
   handle(role, action) {
-    if (role === "sys_admin") {
+    if (role === "sys_admin" || role === "admin") {
       // sys_admin full quyền luôn
       return true;
     }

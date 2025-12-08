@@ -1,5 +1,5 @@
 const Company = require("../models/company.model");
-
+const User = require("../models/user.model");
 module.exports = {
   // CREATE
   createCompany: async (req, res) => {
@@ -88,4 +88,55 @@ module.exports = {
       return res.status(400).json({ error: err.message });
     }
   },
+
+  /* =====================================================
+     ⭐ GET CHECK-IN CONFIG (dựa vào công ty trong token)
+  ====================================================== */
+ getCheckinConfig: async (req, res) => {
+      try {
+        // ⭐ Lấy user từ DB
+        const user = await User.findById(req.user.id).select("company_id");
+
+        if (!user || !user.company_id) {
+          return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+        }
+
+        const company = await Company.findById(user.company_id).select(
+          "checkin_location checkin_radius"
+        );
+
+        return res.json(company ?? {});
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+    },
+
+    /* =====================================================
+       ⭐ UPDATE CHECK-IN CONFIG (admin)
+    ====================================================== */
+    updateCheckinConfig: async (req, res) => {
+      try {
+        // ⭐ Lấy user từ DB
+        const user = await User.findById(req.user.id).select("company_id");
+
+        if (!user || !user.company_id) {
+          return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+        }
+
+        const { lat, lng, address, radius } = req.body;
+
+        const updated = await Company.findByIdAndUpdate(
+          user.company_id,
+          {
+            checkin_location: { lat, lng, address },
+            checkin_radius: radius,
+          },
+          { new: true }
+        );
+
+        return res.json(updated);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+    },
 };
