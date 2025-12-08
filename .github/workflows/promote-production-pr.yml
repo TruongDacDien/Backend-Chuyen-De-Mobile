@@ -1,4 +1,4 @@
-name: Create PR Staging to Master
+name: Promote Staging to Master
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          base: master
+          base: main
           branch: auto/promote-staging-to-master
           title: "Promote staging to master"
           body: "Ready for production release after staging approval."
