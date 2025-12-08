@@ -1,0 +1,11 @@
+tunnel: 8911c13c-12d8-4073-8546-ff87ec9a9cc0
+credentials-file: /home/wsladmin/.cloudflared/8911c13c-12d8-4073-8546-ff87ec9a9cc0.json
+
+ingress:
+  - hostname: befe.io.vn
+    service: http://localhost:3000   # <— không dùng https ở đây
+  - service: http_status:404
+
+originRequest:
+  noTLSVerify: true
+  httpHostHeader: localhost
