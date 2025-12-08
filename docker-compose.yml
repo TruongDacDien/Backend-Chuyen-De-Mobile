@@ -30,10 +30,10 @@ services:
     container_name: cloudflared
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     environment:
-      - CLOUDFLARE_TUNNEL_TOKEN
+      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     volumes:
       - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
     depends_on:
       - nginx
-    restart: always
+    restart: unless-stopped
 
