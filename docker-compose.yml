@@ -29,10 +29,6 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
     command: tunnel run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-    environment:
-    - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    volumes:
-    - ./cloudflared/config.yml:/etc/cloudflared/config.yml
     depends_on:
       - nginx
     restart: always
