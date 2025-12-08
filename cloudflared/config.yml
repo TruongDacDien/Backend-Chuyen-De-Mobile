@@ -6,6 +6,3 @@ ingress:
     service: http://nginx:80
   - service: http_status:404
 
-originRequest:
-  noTLSVerify: true
-  httpHostHeader: localhost
