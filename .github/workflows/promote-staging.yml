@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  create_pr:
+  create_pr_to_staging:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout dev
