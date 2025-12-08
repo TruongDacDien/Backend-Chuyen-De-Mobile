@@ -15,7 +15,7 @@ jobs:
 
       - name: Build and Restart Docker (Production)
         env:
-          COMPOSE_PROJECT_NAME: ${{ secrets.COMPOSE_PROJECT_NAME }}
+          COMPOSE_PROJECT_NAME: production
           BACKEND_PORT: ${{ secrets.BACKEND_PORT }} # ví dụ 3000
           NGINX_PORT: ${{ secrets.NGINX_PORT }}     # ví dụ 80
           PORT: ${{ secrets.PORT }}
