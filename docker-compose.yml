@@ -28,12 +28,12 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
-    volumes:
-      - ./cloudflared/config.yml:/etc/cloudflared/config.yml
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+      - CLOUDFLARE_TUNNEL_TOKEN
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
     depends_on:
       - nginx
     restart: always
-    command: tunnel --config /etc/cloudflared/config.yml run --token ${CLOUDFLARE_TUNNEL_TOKEN}
 
