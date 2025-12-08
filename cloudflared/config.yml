@@ -1,11 +1,13 @@
+<<<<<<< HEAD
 tunnel: c2c5f6a9-a74a-469b-92e0-66a369f1c365
 credentials-file: /home/wsladmin/.cloudflared/c2c5f6a9-a74a-469b-92e0-66a369f1c365.json
 
 ingress:
   - hostname: befe.io.vn
     service: http://localhost:3000   # <— không dùng https ở đây
+=======
+ingress:
+  - hostname: befe.io.vn
+    service: http://nginx:80
+>>>>>>> main
   - service: http_status:404
-
-originRequest:
-  noTLSVerify: true
-  httpHostHeader: localhost

@@ -25,3 +25,6 @@ swagger-output.json
 # Optional build/output
 dist/
 build/
+
+cloudflared/*.json
+.cloudflared/
