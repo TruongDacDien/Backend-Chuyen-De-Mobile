@@ -1,5 +1,5 @@
 tunnel: 8911c13c-12d8-4073-8546-ff87ec9a9cc0
-credentials-file: /home/wsladmin/.cloudflared/8911c13c-12d8-4073-8546-ff87ec9a9cc0.json
+credentials-file: /etc/cloudflared/8911c13c-12d8-4073-8546-ff87ec9a9cc0.json
 
 ingress:
   - hostname: befe.io.vn
