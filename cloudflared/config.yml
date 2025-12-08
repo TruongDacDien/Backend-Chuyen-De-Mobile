@@ -1,0 +1,6 @@
+tunnel: 1481c474-fcb7-4121-8822-3638860512ba
+
+ingress:
+  - hostname: befe.io.vn
+    service: http://nginx:80
+  - service: http_status:404
