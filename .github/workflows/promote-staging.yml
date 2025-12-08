@@ -22,7 +22,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           base: staging
-          branch: staging
+          branch: auto/promote-dev-to-staging
           title: "Promote dev to staging"
           body: "Auto PR when dev is updated."
           delete-branch: true
