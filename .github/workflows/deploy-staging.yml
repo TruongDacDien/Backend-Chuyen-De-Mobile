@@ -15,6 +15,9 @@ jobs:
 
       - name: Build and Restart Docker (Staging)
         env:
+          COMPOSE_PROJECT_NAME: staging
+          BACKEND_PORT: ${{ secrets.BACKEND_PORT }} # ví dụ 3001
+          NGINX_PORT: ${{ secrets.NGINX_PORT }}     # ví dụ 8081
           PORT: ${{ secrets.PORT }}
           MONGO_URI: ${{ secrets.MONGO_URI }}
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
@@ -23,6 +26,6 @@ jobs:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
-          docker compose down
-          docker compose build
-          docker compose up -d
+          docker compose -p $COMPOSE_PROJECT_NAME down
+          docker compose -p $COMPOSE_PROJECT_NAME build
+          docker compose -p $COMPOSE_PROJECT_NAME up -d
