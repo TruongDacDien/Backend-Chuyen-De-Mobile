@@ -3,7 +3,7 @@ credentials-file: /etc/cloudflared/0b8e6294-4909-4f43-8013-7a27a7e62ea3.json
 
 ingress:
   - hostname: befe.io.vn
-    service: http://localhost:3000   # <— không dùng https ở đây
+    service: http://nginx:80
   - service: http_status:404
 
 originRequest:
