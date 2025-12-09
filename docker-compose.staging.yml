@@ -1,0 +1,7 @@
+services:
+  cloudflared:
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config-staging.yml run --token ${CLOUDFLARE_TUNNEL_TOKEN_STAGING}
+    environment:
+      - CLOUDFLARE_TUNNEL_TOKEN_STAGING=${CLOUDFLARE_TUNNEL_TOKEN_STAGING}
+    volumes:
+      - ./cloudflared/config-staging.yml:/etc/cloudflared/config-staging.yml
