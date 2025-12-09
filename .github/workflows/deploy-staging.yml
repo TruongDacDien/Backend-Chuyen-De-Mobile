@@ -36,4 +36,3 @@ jobs:
 
           docker compose -p "$project" down
           docker compose -p "$project" -f docker-compose.yml -f docker-compose.staging.yml up -d --build
-          docker compose -p "$project" up -d
