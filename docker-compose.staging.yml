@@ -1,0 +1,6 @@
+services:
+  cloudflared:
+    environment:
+      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN_STAGING}
+    volumes:
+      - ./cloudflared/config-staging.yml:/etc/cloudflared/config-staging.yml

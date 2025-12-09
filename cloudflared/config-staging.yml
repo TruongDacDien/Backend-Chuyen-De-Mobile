@@ -1,0 +1,4 @@
+ingress:
+  - hostname: staging.befe.io.vn
+    service: http://nginx:80
+  - service: http_status:404
