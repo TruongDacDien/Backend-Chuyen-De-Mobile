@@ -2,6 +2,6 @@ services:
   cloudflared:
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN_PROD}
     environment:
-      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN_PROD}
+      - CLOUDFLARE_TUNNEL_TOKEN_PROD=${CLOUDFLARE_TUNNEL_TOKEN_PROD}
     volumes:
       - ./cloudflared/config-prod.yml:/etc/cloudflared/config-prod.yml

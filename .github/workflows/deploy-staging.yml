@@ -34,5 +34,5 @@ jobs:
             exit 1
           }
 
-          docker compose -p "$project" down
+          docker compose -p "$project" -f docker-compose.yml -f docker-compose.staging.yml down
           docker compose -p "$project" -f docker-compose.yml -f docker-compose.staging.yml up -d --build
