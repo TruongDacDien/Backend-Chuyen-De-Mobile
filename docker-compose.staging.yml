@@ -1,5 +1,6 @@
 services:
   cloudflared:
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN_STAGING}
     environment:
       - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN_STAGING}
     volumes:
