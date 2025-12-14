@@ -1,7 +1,9 @@
 const mongoose = require("mongoose");
 
 const companySchema = new mongoose.Schema({
-  // ---------- Thông Tin Chung ----------
+  /* ================================
+        Thông Tin Chung
+  =================================*/
   name: { type: String, required: true },
   code: { type: String, unique: true },
 
@@ -12,20 +14,21 @@ const companySchema = new mongoose.Schema({
   contact_email: { type: String },
   contact_phone: { type: String },
 
-  // ---------- Subscription ----------
+  /* ================================
+        Subscription
+  =================================*/
   subscription_plan: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "SubscriptionPlan"
+    ref: "SubscriptionPlan",
   },
   subscription_status: {
     type: String,
-    enum: ["active", "expired", "canceled","unactive"],
+    enum: ["active", "expired", "canceled", "unactive"],
     default: "unactive",
   },
-  stripe_subscription_id: { type: String },
-  stripe_customer_id: { type: String },
+  stripe_subscription_id: String,
+  stripe_customer_id: String,
 
-  // ---------- Lịch sử gói ----------
   plan_history: [
     {
       plan: { type: mongoose.Schema.Types.ObjectId, ref: "SubscriptionPlan" },
@@ -33,46 +36,74 @@ const companySchema = new mongoose.Schema({
       start_date: Date,
       end_date: Date,
       created_at: { type: Date, default: Date.now },
-    }
+    },
   ],
 
-  // ---------- Cấu hình công ty ----------
-  company_settings: {
-    working_mode: {
-      type: String,
-      enum: ["office", "hybrid", "remote"],
-      default: "office",
-    },
-    work_days_per_week: { type: Number, default: 6 },
-    weekend_days: { type: [String], default: ["saturday", "sunday"] },
-    holidays: { type: [Date], default: [] },
-    allow_overtime: { type: Boolean, default: false },
-    default_leave_days: { type: Number, default: 12 },
-  },
-
-  // ---------- Cấu hình chấm công ----------
-  attendance_settings: {
-    face_recognition: { type: Boolean, default: true },
-    gps_checkin: { type: Boolean, default: true },
-    allow_remote_checkin: { type: Boolean, default: false },
-
-    working_hours: {
-      checkin_start: { type: String, default: "07:30" },
-      checkin_end: { type: String, default: "09:00" },
-      checkout_earliest: { type: String, default: "16:00" },
-      checkout_latest: { type: String, default: "19:00" },
-    },
-  },
-
-  // ---------- Vị trí Check-in ----------
+  /* ================================
+        ⭐ Attendance Config (theo FE)
+  =================================*/
   checkin_location: {
-    lat: Number,
-    lng: Number,
-    address: String,
+    lat: { type: Number },
+    lng: { type: Number },
+    address: { type: String },
   },
-  checkin_radius: { type: Number, default: 100 },
 
-  // ---------- Soft delete ----------
+  checkin_radius: { type: Number, default: 100 }, // mét 
+  attendance_config: {
+    working_hours: {
+      start_time: { type: String, default: "08:00" },
+      end_time: { type: String, default: "17:00" },
+      break_start: { type: String, default: "12:00" },
+      break_end: { type: String, default: "13:00" },
+      working_days: {
+        type: [String],
+        default: ["mon", "tue", "wed", "thu", "fri", "sat"],
+      },
+      company_holidays: { type: [String], default: [] }, // YYYY-MM-DD
+    },
+
+    late_rule: {
+      allow_minutes: { type: String, default: "5" },
+      deduct_per_minute: { type: Boolean, default: true },
+      unit_minutes: { type: String, default: "15" },
+      max_late_as_absent_minutes: { type: String, default: "240" },
+    },
+
+    early_leave_rule: {
+      deduct_per_minute: { type: Boolean, default: true },
+      unit_minutes: { type: String, default: "15" },
+      max_early_as_absent_minutes: { type: String, default: "240" },
+    },
+
+    overtime_policy: {
+      min_ot_minutes: { type: String, default: "30" },
+      round_to_minutes: { type: String, default: "30" },
+      weekday_rate: { type: String, default: "1.5" },
+      weekend_rate: { type: String, default: "2.0" },
+      holiday_rate: { type: String, default: "3.0" },
+    },
+
+    leave_policy: {
+      annual_leave_days: { type: String, default: "12" },
+      allow_half_day: { type: Boolean, default: true },
+
+      paid_leave_types: [
+        {
+          _id: { type: String },
+          name: { type: String },
+        },
+      ],
+    },
+
+    salary_policy: {
+      workdays_per_month: { type: String, default: "26" },
+      hours_per_day: { type: String, default: "8" },
+    },
+  },
+
+  /* ================================
+        Soft Delete
+  =================================*/
   record_status: { type: Number, default: 1 },
 
   created_at: { type: Date, default: Date.now },

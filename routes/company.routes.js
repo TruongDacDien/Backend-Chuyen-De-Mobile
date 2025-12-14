@@ -12,18 +12,17 @@ const rbac = require("../middleware/rbac.middleware");
  */
 
 /* =====================================================
+   ⭐ CHECK-IN INFO (PHẢI ĐỂ TRƯỚC /:id)
+===================================================== */
+router.get(
+  "/checkin-info",
+  auth,
+  controller.getCheckinInfo
+);
+
+/* =====================================================
    ⭐ CHECK-IN CONFIG (PHẢI ĐỂ TRƯỚC /:id)
 ===================================================== */
-
-/**
- * @swagger
- * /api/company/checkin-config:
- *   get:
- *     summary: Lấy cấu hình vị trí check-in của công ty (admin)
- *     tags: [Company]
- *     security:
- *       - bearerAuth: []
- */
 router.get(
   "/checkin-config",
   auth,
@@ -31,15 +30,6 @@ router.get(
   controller.getCheckinConfig
 );
 
-/**
- * @swagger
- * /api/company/checkin-config:
- *   put:
- *     summary: Cập nhật vị trí & bán kính check-in (admin)
- *     tags: [Company]
- *     security:
- *       - bearerAuth: []
- */
 router.put(
   "/checkin-config",
   auth,
@@ -48,21 +38,38 @@ router.put(
 );
 
 /* =====================================================
-   ⭐ ROUTES CŨ
+   ⭐ ATTENDANCE CONFIG (PHẢI ĐỂ TRƯỚC /:id)
+===================================================== */
+router.get(
+  "/attendance-config",
+  auth,
+  rbac("MANAGE_COMPANY"),
+  controller.getAttendanceConfig
+);
+
+router.put(
+  "/attendance-config",
+  auth,
+  rbac("MANAGE_COMPANY"),
+  controller.updateAttendanceConfig
+);
+
+/* =====================================================
+   ⭐ ROUTES CŨ (CRUD)
 ===================================================== */
 
 router.post("/", controller.createCompany);
 
-router.put("/:id", controller.updateCompany);
-
-router.delete("/:id", controller.deleteCompany);
-
 router.get("/", controller.getAllCompanies);
-
-router.get("/:id", controller.getCompanyById);
 
 router.post("/search", controller.searchCompany);
 
 router.post("/:id/plan-history", controller.addPlanHistory);
+
+router.get("/:id", controller.getCompanyById);
+
+router.put("/:id", controller.updateCompany);
+
+router.delete("/:id", controller.deleteCompany);
 
 module.exports = router;

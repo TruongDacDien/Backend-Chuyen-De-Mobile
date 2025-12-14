@@ -92,51 +92,135 @@ module.exports = {
   /* =====================================================
      ⭐ GET CHECK-IN CONFIG (dựa vào công ty trong token)
   ====================================================== */
- getCheckinConfig: async (req, res) => {
-      try {
-        // ⭐ Lấy user từ DB
-        const user = await User.findById(req.user.id).select("company_id");
+  getCheckinConfig: async (req, res) => {
+    try {
+      // ⭐ Lấy user từ DB
+      const user = await User.findById(req.user.id).select("company_id");
 
-        if (!user || !user.company_id) {
-          return res.status(400).json({ error: "User chưa thuộc công ty nào" });
-        }
-
-        const company = await Company.findById(user.company_id).select(
-          "checkin_location checkin_radius"
-        );
-
-        return res.json(company ?? {});
-      } catch (err) {
-        return res.status(400).json({ error: err.message });
+      if (!user || !user.company_id) {
+        return res.status(400).json({ error: "User chưa thuộc công ty nào" });
       }
-    },
 
-    /* =====================================================
-       ⭐ UPDATE CHECK-IN CONFIG (admin)
-    ====================================================== */
-    updateCheckinConfig: async (req, res) => {
-      try {
-        // ⭐ Lấy user từ DB
-        const user = await User.findById(req.user.id).select("company_id");
+      const company = await Company.findById(user.company_id).select(
+        "checkin_location checkin_radius"
+      );
 
-        if (!user || !user.company_id) {
-          return res.status(400).json({ error: "User chưa thuộc công ty nào" });
-        }
+      return res.json(company ?? {});
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  },
 
-        const { lat, lng, address, radius } = req.body;
+  /* =====================================================
+     ⭐ UPDATE CHECK-IN CONFIG (admin)
+  ====================================================== */
+  updateCheckinConfig: async (req, res) => {
+    try {
+      // ⭐ Lấy user từ DB
+      const user = await User.findById(req.user.id).select("company_id");
 
-        const updated = await Company.findByIdAndUpdate(
-          user.company_id,
-          {
-            checkin_location: { lat, lng, address },
-            checkin_radius: radius,
-          },
-          { new: true }
-        );
-
-        return res.json(updated);
-      } catch (err) {
-        return res.status(400).json({ error: err.message });
+      if (!user || !user.company_id) {
+        return res.status(400).json({ error: "User chưa thuộc công ty nào" });
       }
-    },
+
+      const { lat, lng, address, radius } = req.body;
+
+      const updated = await Company.findByIdAndUpdate(
+        user.company_id,
+        {
+          checkin_location: { lat, lng, address },
+          checkin_radius: radius,
+        },
+        { new: true }
+      );
+
+      return res.json(updated);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  },
+  /* =====================================================
+ ⭐ GET ATTENDANCE CONFIG
+===================================================== */
+  getAttendanceConfig: async (req, res) => {
+    try {
+      const user = await User.findById(req.user.id).select("company_id");
+
+      if (!user || !user.company_id) {
+        return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+      }
+
+      const company = await Company.findById(user.company_id).select(
+        "attendance_config"
+      );
+
+      return res.json(company?.attendance_config || {});
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  },
+  /* =====================================================
+     ⭐ UPDATE ATTENDANCE CONFIG
+  ===================================================== */
+  updateAttendanceConfig: async (req, res) => {
+    try {
+      const user = await User.findById(req.user.id).select("company_id");
+
+      if (!user || !user.company_id) {
+        return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+      }
+
+      // req.body EXPECT: { attendance_config: {...} }
+      const updated = await Company.findByIdAndUpdate(
+        user.company_id,
+        { attendance_config: req.body },
+        { new: true }
+      ).select("attendance_config");
+
+      return res.json(updated.attendance_config);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  },
+  /* =====================================================
+   ⭐ GET CHECK-IN INFORMATION (USER)
+===================================================== */
+getCheckinInfo: async (req, res) => {
+  try {
+    // Lấy user hiện tại
+    const user = await User.findById(req.user.id).select(
+      "company_id attendance_logs full_name"
+    );
+
+    if (!user || !user.company_id) {
+      return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+    }
+
+    // Lấy company + config
+    const company = await Company.findById(user.company_id).select(
+      "checkin_location checkin_radius attendance_config name"
+    );
+
+    if (!company) {
+      return res.status(404).json({ error: "Company không tồn tại" });
+    }
+
+    return res.json({
+      company: {
+        name: company.name,
+        checkin_location: company.checkin_location,
+        checkin_radius: company.checkin_radius,
+        attendance_config: company.attendance_config,
+      },
+      user: {
+        full_name: user.full_name,
+        attendance_logs: user.attendance_logs || [],
+      },
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+},
+
+
 };

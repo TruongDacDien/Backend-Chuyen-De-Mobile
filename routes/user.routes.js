@@ -10,64 +10,20 @@ const userController = require("../controllers/user.controller");
  * tags:
  *   - name: Users
  *     description: User management APIs
+ *   - name: Requests
+ *     description: Leave & Overtime APIs
  */
 
-/**
- * @swagger
- * /api/users:
- *   post:
- *     summary: Tạo nhân viên mới (Admin)
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- */
+/* ======================================================
+   USER MANAGEMENT
+====================================================== */
+
 router.post("/", auth, rbac("MANAGE_USERS"), userController.createUserByAdmin);
-
-/**
- * @swagger
- * /api/users:
- *   get:
- *     summary: Lấy danh sách toàn bộ user
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- */
 router.get("/", auth, rbac("MANAGE_USERS"), userController.getAllUsers);
 
-/**
- * @swagger
- * /api/users/me:
- *   get:
- *     summary: Lấy thông tin user hiện tại
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- */
 router.get("/me", auth, rbac("VIEW_SELF"), userController.getMe);
-
-/**
- * @swagger
- * /api/users/me:
- *   put:
- *     summary: Cập nhật profile của tôi
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- */
 router.put("/me", auth, rbac("VIEW_SELF"), userController.updateMyProfile);
 
-/**
- * @swagger
- * /api/users/company:
- *   get:
- *     summary: Lấy danh sách user thuộc công ty của tài khoản đang đăng nhập
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Danh sách nhân viên
- */
 router.get(
   "/company",
   auth,
@@ -75,37 +31,118 @@ router.get(
   userController.getUsersByCompany
 );
 
-/**
- * @swagger
- * /api/users/{id}:
- *   get:
- *     summary: Lấy thông tin user theo ID
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- */
+router.get(
+  "/company/:id",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.getUserDetailByCompanyAdmin
+);
+
+router.put(
+  "/company/:id",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.updateUserByCompanyAdmin
+);
+
+router.patch(
+  "/:id/approve",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.approveUserProfile
+);
+
+router.patch(
+  "/:id/status",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.updateUserStatus
+);
+
 router.get("/:id", auth, rbac("VIEW_USER"), userController.getUserById);
-
-/**
- * @swagger
- * /api/users/{id}:
- *   put:
- *     summary: Cập nhật user (Admin)
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- */
 router.put("/:id", auth, rbac("MANAGE_USERS"), userController.updateUser);
-
-/**
- * @swagger
- * /api/users/{id}:
- *   delete:
- *     summary: Xóa mềm user
- *     tags: [Users]
- *     security:
- *       - bearerAuth: []
- */
 router.delete("/:id", auth, rbac("MANAGE_USERS"), userController.deleteUser);
+
+/* ======================================================
+   CHECK-IN / CHECK-OUT
+====================================================== */
+
+router.post(
+  "/checkin/location-check",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.locationCheck
+);
+
+router.post(
+  "/checkin",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.checkAttendance
+);
+
+/* ======================================================
+   ⭐ LEAVE REQUESTS (USER)
+====================================================== */
+
+router.post(
+  "/requests/leave",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.createLeaveRequest
+);
+
+router.get(
+  "/requests/leave/me",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.getMyLeaveRequests
+);
+
+/* ======================================================
+   ⭐ OVERTIME REQUESTS (USER)
+====================================================== */
+
+router.post(
+  "/requests/overtime",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.createOvertimeRequest
+);
+
+router.get(
+  "/requests/overtime/me",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.getMyOvertimeRequests
+);
+
+/* ======================================================
+   ⭐ ADMIN – REQUESTS
+====================================================== */
+
+// Admin xem tất cả request pending (leave + overtime)
+router.get(
+  "/admin/requests/pending",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.adminGetPendingRequests
+);
+
+// ✅ ADMIN: LẤY TẤT CẢ PHIẾU OT (ALL / FILTER STATUS)
+router.get(
+  "/admin/requests/overtime",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.adminGetAllOvertimeRequests
+);
+
+// Admin duyệt / từ chối OT
+router.patch(
+  "/admin/requests/overtime/:userId/:otId",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.adminDecideOvertimeRequest
+);
 
 module.exports = router;
