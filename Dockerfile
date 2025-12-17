@@ -1,22 +1,20 @@
-# Dockerfile (ở root backend)
-FROM node:20-alpine AS base
+# Sử dụng Node.js nhẹ (Alpine)
+FROM node:18-alpine
+
+# Thư mục làm việc trong container
 WORKDIR /app
 
-# 1) Cài deps bằng cache tốt
+# Copy package.json trước để cache dependencies
 COPY package*.json ./
-RUN npm ci --omit=dev
 
-# 2) Copy source
+# Cài dependencies
+RUN npm install --production
+
+# Copy toàn bộ source code vào container
 COPY . .
 
-# 3) Thiết lập runtime
-ENV NODE_ENV=production
+# Mở port (ví dụ 3000, nếu app bạn dùng khác thì chỉnh)
 EXPOSE 3000
 
-# (khuyến nghị) healthcheck cho Azure
-HEALTHCHECK --interval=30s --timeout=3s --retries=5 \
-  CMD wget -qO- http://localhost:3000/health || exit 1
-
-# 4) Start
+# Chạy app
 CMD ["npm", "start"]
-

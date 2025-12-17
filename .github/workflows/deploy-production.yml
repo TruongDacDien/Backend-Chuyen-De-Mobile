@@ -1,0 +1,39 @@
+name: Deploy Production (Self-hosted)
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy-production:
+    runs-on: self-hosted
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and Restart Docker (Production)
+        env:
+          COMPOSE_PROJECT_NAME: production
+          BACKEND_PORT: ${{ secrets.BACKEND_PORT }} # ví dụ 3000
+          NGINX_PORT: ${{ secrets.NGINX_PORT }}     # ví dụ 80
+          PORT: ${{ secrets.PORT }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CLOUDFLARE_TUNNEL_TOKEN_PROD: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN_PROD }}
+        run: |
+          $project = $env:COMPOSE_PROJECT_NAME
+          Write-Host "Project=$project"
+
+          if (-not $project) {
+            Write-Host "COMPOSE_PROJECT_NAME is empty"
+            exit 1
+          }
+
+          docker compose -p "$project" -f docker-compose.yml -f docker-compose.prod.yml down
+          docker compose -p "$project" -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+

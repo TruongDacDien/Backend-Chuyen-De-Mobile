@@ -1,0 +1,28 @@
+name: Promote Dev to Staging
+
+on:
+  push:
+    branches: ["dev"]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create_pr_to_staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Create PR to staging
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: staging
+          branch: auto/promote-dev-to-staging
+          title: "Promote dev to staging"
+          body: "Auto PR when dev is updated."
+          delete-branch: true
