@@ -187,16 +187,14 @@ module.exports = {
 ===================================================== */
 getCheckinInfo: async (req, res) => {
   try {
-    // Lấy user hiện tại
     const user = await User.findById(req.user.id).select(
-      "company_id attendance_logs full_name"
+      "company_id attendance_logs full_name checkin_complaints profile_approved"
     );
 
     if (!user || !user.company_id) {
       return res.status(400).json({ error: "User chưa thuộc công ty nào" });
     }
 
-    // Lấy company + config
     const company = await Company.findById(user.company_id).select(
       "checkin_location checkin_radius attendance_config name"
     );
@@ -215,6 +213,8 @@ getCheckinInfo: async (req, res) => {
       user: {
         full_name: user.full_name,
         attendance_logs: user.attendance_logs || [],
+        checkin_complaints: user.checkin_complaints || [],
+        profile_approved: user.profile_approved ?? false,
       },
     });
   } catch (err) {
@@ -222,5 +222,90 @@ getCheckinInfo: async (req, res) => {
   }
 },
 
+  /* =====================================================
+     ⭐ GET MY COMPANY (USER / ADMIN)
+     → lấy company theo token
+  ===================================================== */
+  getMyCompany: async (req, res) => {
+    try {
+      /* =========================
+         1️⃣ LẤY USER HIỆN TẠI (FULL)
+      ========================= */
+      const user = await User.findById(req.user.id)
+        .populate("department_id", "name department_code")
+        .lean();
+
+      if (!user || !user.company_id) {
+        return res.status(400).json({
+          error: "User chưa thuộc công ty nào",
+        });
+      }
+
+      /* =========================
+         2️⃣ LẤY COMPANY
+      ========================= */
+      const company = await Company.findOne({
+        _id: user.company_id,
+        record_status: 1,
+      }).lean();
+
+      if (!company) {
+        return res.status(404).json({
+          error: "Company không tồn tại",
+        });
+      }
+
+      /* =========================
+         3️⃣ RESPONSE (TRẢ ĐỦ)
+      ========================= */
+      return res.json({
+        company: {
+          id: company._id,
+          name: company.name,
+          code: company.code,
+          avatar: company.avatar,
+          images: company.images,
+          address: company.address,
+          contact_email: company.contact_email,
+          contact_phone: company.contact_phone,
+
+          subscription_status: company.subscription_status,
+          subscription_plan: company.subscription_plan,
+
+          checkin_location: company.checkin_location,
+          checkin_radius: company.checkin_radius,
+
+          attendance_config: company.attendance_config,
+
+          created_at: company.created_at,
+        },
+
+        // ✅ FULL USER – KHÔNG CẮT GÌ
+        user: {
+          ...user,
+          id: user._id,
+
+          // normalize nhẹ cho FE dễ xài
+          department: user.department_id
+            ? {
+              id: user.department_id._id,
+              name: user.department_id.name,
+              code: user.department_id.department_code,
+            }
+            : null,
+        },
+      });
+    } catch (err) {
+      console.error("getMyCompany:", err);
+      return res.status(500).json({
+        error: err.message || "Get my company failed",
+      });
+    }
+  },
+
+
+
 
 };
+
+

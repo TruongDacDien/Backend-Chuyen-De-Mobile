@@ -1,40 +1,88 @@
-const { addConnection, removeConnection } = require("./registry");
+const { addConnection, removeConnection, getSocketsOf } = require("./registry");
+const User = require("../models/user.model");
 
-/**
- * Sự kiện:
- *  - init (client->server): { userId }
- *  - pinguser (server->client): do REST gọi strategy để emit
- *  - disconnect (tự động): gỡ kết nối
- */
 module.exports = function attachGateway(io) {
   const nsp = io.of("/ping");
 
-  nsp.on("connection", (socket) => {
-    console.log("🔌 socket connected:", { socketId: socket.id, nsp: "/ping" });
+  // 🔔 helper ping toàn server
+  const pingAll = (payload = {}) => {
+    console.log("📡 Emit pinguser to ALL clients", payload);
+    nsp.emit("pinguser", payload);
+  };
 
-    socket.on("init", ({ userId }) => {
-      console.log("📨 [init] payload:", { socketId: socket.id, userId });
+  nsp.on("connection", (socket) => {
+    console.log("🔌 socket connected:", {
+      socketId: socket.id,
+      nsp: "/ping",
+    });
+
+    // ===============================
+    // INIT (client -> server)
+    // ===============================
+    socket.on("init", async ({ userId }) => {
+      console.log("📨 [init]", { socketId: socket.id, userId });
 
       if (!userId) {
         socket.emit("init:error", { message: "userId is required" });
-        console.log("❌ [init] missing userId -> init:error sent");
         return;
       }
 
       socket.data.userId = userId;
       addConnection(userId, socket.id);
 
-      socket.emit("init:ack", { ok: true, socketId: socket.id, userId });
-      console.log("✅ [init] ack sent:", { socketId: socket.id, userId });
+      try {
+        await User.findByIdAndUpdate(userId, { online: true });
+        console.log(`🟢 User ${userId} ONLINE`);
+
+        // 🔥 PING TOÀN SERVER (USER ONLINE)
+        pingAll({
+          type: "user_online",
+          userId,
+        });
+      } catch (err) {
+        console.error("❌ update online error:", err);
+      }
+
+      socket.emit("init:ack", {
+        ok: true,
+        socketId: socket.id,
+        userId,
+      });
     });
 
-    socket.on("disconnect", (reason) => {
+    // ===============================
+    // DISCONNECT
+    // ===============================
+    socket.on("disconnect", async (reason) => {
       const userId = socket.data.userId;
-      console.log("🔌 socket disconnected:", { socketId: socket.id, userId, reason });
-      if (userId) removeConnection(userId, socket.id);
+      console.log("🔌 socket disconnected:", {
+        socketId: socket.id,
+        userId,
+        reason,
+      });
+
+      if (!userId) return;
+
+      removeConnection(userId, socket.id);
+
+      // ❗ chỉ offline khi KHÔNG còn socket nào
+      const sockets = getSocketsOf(userId);
+      if (sockets.size === 0) {
+        try {
+          await User.findByIdAndUpdate(userId, { online: false });
+          console.log(`⚫ User ${userId} OFFLINE`);
+
+          // 🔥 PING TOÀN SERVER (USER OFFLINE)
+          pingAll({
+            type: "user_offline",
+            userId,
+          });
+        } catch (err) {
+          console.error("❌ update offline error:", err);
+        }
+      }
     });
   });
 
-  // Trả nsp ra cho Strategy dùng
   return { nsp };
 };

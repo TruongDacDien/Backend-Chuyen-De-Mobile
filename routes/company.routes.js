@@ -21,6 +21,15 @@ router.get(
 );
 
 /* =====================================================
+   ⭐ GET MY COMPANY (THEO TOKEN)
+===================================================== */
+router.get(
+  "/me",
+  auth,
+  controller.getMyCompany
+);
+
+/* =====================================================
    ⭐ CHECK-IN CONFIG (PHẢI ĐỂ TRƯỚC /:id)
 ===================================================== */
 router.get(
@@ -43,7 +52,7 @@ router.put(
 router.get(
   "/attendance-config",
   auth,
-  rbac("MANAGE_COMPANY"),
+  rbac("VIEW_SELF"),
   controller.getAttendanceConfig
 );
 
@@ -57,7 +66,6 @@ router.put(
 /* =====================================================
    ⭐ ROUTES CŨ (CRUD)
 ===================================================== */
-
 router.post("/", controller.createCompany);
 
 router.get("/", controller.getAllCompanies);
