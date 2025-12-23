@@ -3,8 +3,494 @@ const { ok, err } = require("../utils/response");
 const crypto = require("crypto");
 const mailer = require("../services/MailFacade"); // chỉnh path theo project của bạn
 const Company = require("../models/company.model");
+const Department = require("../models/department.model");
+const pad2 = (n) => String(n).padStart(2, "0");
+const toDateUTC = (y, m, d) => new Date(Date.UTC(y, m - 1, d));
+const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+const { pushToUsers } = require("../utils/pushNotification.util");
+const dayNameFromYMD = (ymd) => {
+  // ymd: "YYYY-MM-DD"
+  const [Y, M, D] = ymd.split("-").map(Number);
+  const dt = toDateUTC(Y, M, D);
+  const dow = dt.getUTCDay(); // 0 Sun .. 6 Sat
+  return ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][dow];
+};
+
+const timeToMinutes = (hhmm) => {
+  if (!hhmm) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+};
+
+const ceilToUnit = (minutes, unit) => {
+  if (!unit || unit <= 0) return minutes;
+  return Math.ceil(minutes / unit) * unit;
+};
+
+const floorToUnit = (minutes, unit) => {
+  if (!unit || unit <= 0) return minutes;
+  return Math.floor(minutes / unit) * unit;
+};
+
+const isDateInRangeInclusive = (d, start, end) => {
+  // all are "YYYY-MM-DD" ISO -> string compare works
+  return start <= d && d <= end;
+};
+
+const buildMonthKey = (ymd) => ymd.slice(0, 7); // "YYYY-MM"
+const buildYMD = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
+
+/* =========================
+   Core calculator per month
+========================= */
+function calcMonth({ user, company, year, month }) {
+  const cfg = company?.attendance_config || {};
+  const wh = cfg.working_hours || {};
+  const lateRule = cfg.late_rule || {};
+  const earlyRule = cfg.early_leave_rule || {};
+  const otPolicy = cfg.overtime_policy || {};
+  const salaryPolicy = cfg.salary_policy || {};
+
+  const workingDaysCfg = wh.working_days || ["mon", "tue", "wed", "thu", "fri", "sat"];
+  const holidays = wh.company_holidays || [];
+
+  const startMin = timeToMinutes(wh.start_time || "08:00");
+  const endMin = timeToMinutes(wh.end_time || "17:00");
+  const breakStart = timeToMinutes(wh.break_start || "12:00");
+  const breakEnd = timeToMinutes(wh.break_end || "13:00");
+  const breakMinutes = Math.max(0, (breakEnd ?? 0) - (breakStart ?? 0));
+
+  const allowLate = Number(lateRule.allow_minutes || "5");
+  const lateDeductPerMinute = !!lateRule.deduct_per_minute;
+  const lateUnit = Number(lateRule.unit_minutes || "15");
+  const maxLateAsAbsent = Number(lateRule.max_late_as_absent_minutes || "240");
+
+  const earlyDeductPerMinute = !!earlyRule.deduct_per_minute;
+  const earlyUnit = Number(earlyRule.unit_minutes || "15");
+  const maxEarlyAsAbsent = Number(earlyRule.max_early_as_absent_minutes || "240");
+
+  const minOt = Number(otPolicy.min_ot_minutes || "30");
+  const otRoundUnit = Number(otPolicy.round_to_minutes || "30");
+  const rateWeekday = Number(otPolicy.weekday_rate || "1.5");
+  const rateWeekend = Number(otPolicy.weekend_rate || "2.0");
+  const rateHoliday = Number(otPolicy.holiday_rate || "3.0");
+
+  const workdaysPerMonth = Number(salaryPolicy.workdays_per_month || "26");
+  const hoursPerDay = Number(salaryPolicy.hours_per_day || "8");
+  const minutesPerDay = hoursPerDay * 60;
+
+  const baseSalary = Number(user.salary || 0);
+  const salaryPerDay = workdaysPerMonth > 0 ? baseSalary / workdaysPerMonth : 0;
+  const salaryPerMinute = minutesPerDay > 0 ? salaryPerDay / minutesPerDay : 0;
+
+  // Index data for fast lookup
+  const logsByDate = new Map();
+  (user.attendance_logs || []).forEach((l) => {
+    if (l?.date) logsByDate.set(l.date, l);
+  });
+
+  const complaintsByKey = new Map();
+  (user.checkin_complaints || []).forEach((c) => {
+    if (!c?.date || !c?.action) return;
+    if (c.status !== "approved") return;
+    complaintsByKey.set(`${c.date}_${c.action}`, c);
+  });
+
+  const approvedLeaves = (user.leave_requests || []).filter((lr) => lr?.status === "approved");
+
+  const otByDate = new Map();
+  (user.overtime_logs || []).forEach((o) => {
+    if (!o?.date || o.status !== "approved") return;
+    const prev = otByDate.get(o.date) || [];
+    prev.push(o);
+    otByDate.set(o.date, prev);
+  });
+
+  // Iterate days in month
+  const dim = daysInMonth(year, month);
+  const days = [];
+
+  // Monthly totals
+  let workingDays = 0;
+  let unpaidDays = 0;
+
+  let lateMinutesTotal = 0;
+  let earlyMinutesTotal = 0;
+
+  let otWeekdayMinutes = 0;
+  let otWeekendMinutes = 0;
+  let otHolidayMinutes = 0;
+
+  let otPayTotal = 0;
+
+  for (let d = 1; d <= dim; d++) {
+    const ymd = buildYMD(year, month, d);
+    const dayName = dayNameFromYMD(ymd);
+
+    const isHoliday = holidays.includes(ymd);
+    const isWorkingDay = workingDaysCfg.includes(dayName);
+    const isOff = !isWorkingDay || isHoliday;
+
+    // Leave cover? (full-day only)
+    const leave = approvedLeaves.find((lr) =>
+      lr?.start_date && lr?.end_date && isDateInRangeInclusive(ymd, lr.start_date, lr.end_date)
+    );
+
+    // Effective in/out with complaint override
+    const log = logsByDate.get(ymd);
+    const cinC = complaintsByKey.get(`${ymd}_check_in`);
+    const coutC = complaintsByKey.get(`${ymd}_check_out`);
+
+    const inTimeStr = cinC?.time ?? log?.check_in_time ?? null;
+    const outTimeStr = coutC?.time ?? log?.check_out_time ?? null;
+
+    const inMin = timeToMinutes(inTimeStr);
+    const outMin = timeToMinutes(outTimeStr);
+    const hasPunchPair = inMin != null && outMin != null;
+
+    // OT minutes for the day (approved)
+    const otLogs = otByDate.get(ymd) || [];
+    let otMinutesRaw = 0;
+    for (const o of otLogs) {
+      const h = Number(o.hours || 0);
+      otMinutesRaw += Math.max(0, h * 60);
+    }
+    let otMinutes = 0;
+    if (otMinutesRaw >= minOt) {
+      // OT rounding: floor to round_to_minutes
+      otMinutes = floorToUnit(otMinutesRaw, otRoundUnit);
+    }
+
+    // classify OT rate and totals
+    let otRate = rateWeekday;
+    if (isHoliday) otRate = rateHoliday;
+    else if (!isWorkingDay) otRate = rateWeekend;
+
+    const otPay = otMinutes * salaryPerMinute * otRate;
+    otPayTotal += otPay;
+
+    if (otMinutes > 0) {
+      if (isHoliday) otHolidayMinutes += otMinutes;
+      else if (!isWorkingDay) otWeekendMinutes += otMinutes;
+      else otWeekdayMinutes += otMinutes;
+    }
+
+    // Default day result
+    let type = "off"; // off | holiday | work | paid_leave | unpaid_leave | absent
+    let lateMinutes = 0;
+    let earlyMinutes = 0;
+    let penaltyMinutes = 0;
+    let isOnlyOt = false;
+
+    if (isHoliday) type = "holiday";
+    else if (isOff) type = "off";
+
+    // For OFF/Holiday: do not calculate late/early; only OT is relevant
+    if (!isOff) {
+      // Standard working day
+      if (leave) {
+        if (leave.type === "unpaid") {
+          type = "unpaid_leave";
+          unpaidDays += 1;
+        } else {
+          type = "paid_leave";
+          workingDays += 1;
+        }
+      } else {
+        // No leave, need attendance
+        if (!hasPunchPair) {
+          type = "absent";
+          unpaidDays += 1;
+        } else {
+          type = "work";
+          workingDays += 1;
+
+          // late/early minutes
+          lateMinutes = Math.max(0, inMin - startMin);
+          if (lateMinutes <= allowLate) lateMinutes = 0;
+
+          earlyMinutes = Math.max(0, endMin - outMin);
+
+          // if too late/too early => absent
+          if (lateMinutes >= maxLateAsAbsent || earlyMinutes >= maxEarlyAsAbsent) {
+            type = "absent";
+            // revert counted working day -> unpaid day
+            workingDays -= 1;
+            unpaidDays += 1;
+
+            lateMinutes = 0;
+            earlyMinutes = 0;
+            penaltyMinutes = 0;
+          } else {
+            // penalty rounding
+            const latePenalty = lateDeductPerMinute
+              ? lateMinutes
+              : ceilToUnit(lateMinutes, lateUnit);
+
+            const earlyPenalty = earlyDeductPerMinute
+              ? earlyMinutes
+              : ceilToUnit(earlyMinutes, earlyUnit);
+
+            penaltyMinutes = latePenalty + earlyPenalty;
+            lateMinutesTotal += latePenalty;
+            earlyMinutesTotal += earlyPenalty;
+          }
+        }
+      }
+    }
+
+    // isOnlyOt: "chỉ có OT không đi làm"
+    // => có OT minutes >0 và không có punch pair và không phải leave
+    if (otMinutes > 0 && !hasPunchPair && !leave) {
+      isOnlyOt = true;
+    }
+
+    days.push({
+      date: ymd,
+      type,
+      check_in: inTimeStr,
+      check_out: outTimeStr,
+      late_minutes: lateMinutes,
+      early_minutes: earlyMinutes,
+      penalty_minutes: penaltyMinutes,
+      ot_minutes: otMinutes,
+      isOnlyOt,
+    });
+  }
+
+  // Monthly deductions
+  const deductionUnpaid = unpaidDays * salaryPerDay;
+  const deductionMinutes = (lateMinutesTotal + earlyMinutesTotal) * salaryPerMinute;
+
+  const netSalary = baseSalary - deductionUnpaid - deductionMinutes + otPayTotal;
+
+  return {
+    year,
+    month,
+    workingDays,
+    unpaidDays,
+    lateMinutes: lateMinutesTotal,
+    earlyMinutes: earlyMinutesTotal,
+    penaltyMinutes: lateMinutesTotal + earlyMinutesTotal,
+
+    otWeekdayMinutes,
+    otWeekendMinutes,
+    otHolidayMinutes,
+
+    grossSalary: baseSalary,
+    netSalary: Math.round(netSalary), // tuỳ bạn: round / floor / keep decimal
+    days,
+  };
+}
+
+/* =========================
+   Build list of months exist
+========================= */
+function extractMonthKeys(user) {
+  const keys = new Set();
+
+  (user.attendance_logs || []).forEach((l) => l?.date && keys.add(buildMonthKey(l.date)));
+  (user.checkin_complaints || []).forEach((c) => c?.date && keys.add(buildMonthKey(c.date)));
+  (user.overtime_logs || []).forEach((o) => o?.date && keys.add(buildMonthKey(o.date)));
+  (user.leave_requests || []).forEach((lr) => {
+    if (lr?.start_date) keys.add(buildMonthKey(lr.start_date));
+    if (lr?.end_date) keys.add(buildMonthKey(lr.end_date));
+  });
+
+  return Array.from(keys).sort((a, b) => (a < b ? 1 : -1)); // desc
+}
+
+
 module.exports = {
   // ===================== GET ALL USERS =====================
+
+  getMyTimesheetMonthsSummary: async (req, res) => {
+    try {
+      const user = await User.findById(req.user.id).select(
+        "salary company_id attendance_logs checkin_complaints leave_requests overtime_logs"
+      ).lean();
+
+      if (!user?.company_id) return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+
+      const company = await Company.findById(user.company_id).select("attendance_config").lean();
+      if (!company) return res.status(404).json({ error: "Company không tồn tại" });
+
+      const monthKeys = extractMonthKeys(user);
+
+      const results = monthKeys.map((k) => {
+        const [yStr, mStr] = k.split("-");
+        const year = Number(yStr);
+        const month = Number(mStr);
+        const mData = calcMonth({ user, company, year, month });
+
+        // trả đúng field bạn cần
+        return {
+          year: mData.year,
+          month: mData.month,
+          workingDays: mData.workingDays,
+          unpaidDays: mData.unpaidDays,
+          lateMinutes: mData.lateMinutes,
+          earlyMinutes: mData.earlyMinutes,
+          penaltyMinutes: mData.penaltyMinutes,
+          otWeekdayMinutes: mData.otWeekdayMinutes,
+          otWeekendMinutes: mData.otWeekendMinutes,
+          otHolidayMinutes: mData.otHolidayMinutes,
+          netSalary: mData.netSalary,
+        };
+      });
+
+      return res.json(results);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  },
+
+  // ✅ 2) Month detail for ME (days)
+  getMyMonthTimesheetDetail: async (req, res) => {
+    try {
+      const year = Number(req.query.year);
+      const month = Number(req.query.month);
+      if (!year || !month || month < 1 || month > 12) {
+        return res.status(400).json({ error: "year/month không hợp lệ" });
+      }
+
+      const user = await User.findById(req.user.id).select(
+        "salary company_id attendance_logs checkin_complaints leave_requests overtime_logs"
+      ).lean();
+
+      if (!user?.company_id) return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+
+      const company = await Company.findById(user.company_id).select("attendance_config name").lean();
+      if (!company) return res.status(404).json({ error: "Company không tồn tại" });
+
+      const mData = calcMonth({ user, company, year, month });
+
+      // Summary + days detail
+      return res.json({
+        summary: {
+          year: mData.year,
+          month: mData.month,
+          workingDays: mData.workingDays,
+          unpaidDays: mData.unpaidDays,
+          lateMinutes: mData.lateMinutes,
+          earlyMinutes: mData.earlyMinutes,
+          penaltyMinutes: mData.penaltyMinutes,
+          otWeekdayMinutes: mData.otWeekdayMinutes,
+          otWeekendMinutes: mData.otWeekendMinutes,
+          otHolidayMinutes: mData.otHolidayMinutes,
+          netSalary: mData.netSalary,
+        },
+        days: mData.days.map((d) => ({
+          date: d.date,
+          check_in: d.check_in,
+          type: d.type,
+          check_out: d.check_out,
+          late_minutes: d.late_minutes,
+          early_minutes: d.early_minutes,
+          ot_minutes: d.ot_minutes,
+          isonlyot: d.isOnlyOt,
+        })),
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  },
+
+  // (OPTION) Summary by userId
+  getUserTimesheetMonthsSummary: async (req, res) => {
+    try {
+      const { userId } = req.params;
+
+      const user = await User.findById(userId).select(
+        "salary company_id attendance_logs checkin_complaints leave_requests overtime_logs"
+      ).lean();
+
+      if (!user?.company_id) return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+
+      const company = await Company.findById(user.company_id).select("attendance_config").lean();
+      if (!company) return res.status(404).json({ error: "Company không tồn tại" });
+
+      const monthKeys = extractMonthKeys(user);
+
+      const results = monthKeys.map((k) => {
+        const [yStr, mStr] = k.split("-");
+        const year = Number(yStr);
+        const month = Number(mStr);
+        const mData = calcMonth({ user, company, year, month });
+
+        return {
+          year: mData.year,
+          month: mData.month,
+          workingDays: mData.workingDays,
+          unpaidDays: mData.unpaidDays,
+          lateMinutes: mData.lateMinutes,
+          earlyMinutes: mData.earlyMinutes,
+          penaltyMinutes: mData.penaltyMinutes,
+          otWeekdayMinutes: mData.otWeekdayMinutes,
+          otWeekendMinutes: mData.otWeekendMinutes,
+          otHolidayMinutes: mData.otHolidayMinutes,
+          netSalary: mData.netSalary,
+        };
+      });
+
+      return res.json(results);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  },
+
+  // (OPTION) Detail by userId
+  getUserMonthTimesheetDetail: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const year = Number(req.query.year);
+      const month = Number(req.query.month);
+      if (!year || !month || month < 1 || month > 12) {
+        return res.status(400).json({ error: "year/month không hợp lệ" });
+      }
+
+      const user = await User.findById(userId).select(
+        "salary company_id attendance_logs checkin_complaints leave_requests overtime_logs"
+      ).lean();
+
+      if (!user?.company_id) return res.status(400).json({ error: "User chưa thuộc công ty nào" });
+
+      const company = await Company.findById(user.company_id).select("attendance_config name").lean();
+      if (!company) return res.status(404).json({ error: "Company không tồn tại" });
+
+      const mData = calcMonth({ user, company, year, month });
+
+      return res.json({
+        summary: {
+          year: mData.year,
+          month: mData.month,
+          workingDays: mData.workingDays,
+          unpaidDays: mData.unpaidDays,
+          lateMinutes: mData.lateMinutes,
+          earlyMinutes: mData.earlyMinutes,
+          penaltyMinutes: mData.penaltyMinutes,
+          otWeekdayMinutes: mData.otWeekdayMinutes,
+          otWeekendMinutes: mData.otWeekendMinutes,
+          otHolidayMinutes: mData.otHolidayMinutes,
+          netSalary: mData.netSalary,
+        },
+        days: mData.days.map((d) => ({
+          date: d.date,
+          check_in: d.check_in,
+          type: d.type,
+          check_out: d.check_out,
+          late_minutes: d.late_minutes,
+          early_minutes: d.early_minutes,
+          ot_minutes: d.ot_minutes,
+          isonlyot: d.isOnlyOt,
+        })),
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  },
+
   getAllUsers: async (req, res) => {
     try {
       const users = await User.find({ record_status: 1 })
@@ -59,6 +545,520 @@ module.exports = {
       return err(res, 400, e?.message || "Get user failed");
     }
   },
+
+  getMyChatList: async (req, res) => {
+    try {
+      const userId = String(req.user.id);
+
+      const me = await User.findById(userId)
+        .populate({
+          path: "private_chats.peer_id",
+          select: "full_name avatar online job_title employee_code",
+        })
+        .select("private_chats department_id");
+
+      if (!me) return err(res, 404, "User not found");
+
+      /* =========================
+         PRIVATE CHAT (USER ↔ USER)
+      ========================= */
+      const privateChats = me.private_chats.map((chat) => ({
+        id: chat.peer_id?._id,
+        type: "user",
+
+        name: chat.peer_id?.full_name || "",
+        avatar: chat.peer_id?.avatar || "",
+        online: chat.peer_id?.online || false,
+
+        job_title: chat.peer_id?.job_title || "",
+        employee_code: chat.peer_id?.employee_code || "",
+
+        last_message: chat.last_message || "",
+        last_time: chat.last_time || null,
+        unread_count: chat.unread_count || 0,
+      }));
+
+      /* =========================
+         GROUP CHAT (DEPARTMENT)
+      ========================= */
+      const departments = await Department.find({
+        _id: me.department_id,
+      })
+        .select("name department_code group_chats users")
+        .lean();
+
+      const groupChats = [];
+
+      for (const dept of departments) {
+        const total = dept.users.length;
+
+        const onlineCount = await User.countDocuments({
+          _id: { $in: dept.users },
+          online: true,
+        });
+
+        for (const g of dept.group_chats) {
+          // 🔥 TÍNH UNREAD GROUP
+          const unreadCount = (g.messages || []).filter(
+            (m) =>
+              String(m.sender_id) !== userId &&
+              !m.seen_by?.some((u) => String(u) === userId)
+          ).length;
+
+          groupChats.push({
+            id: g._id,
+            type: "group",
+
+            // ✅ department info
+            department_id: dept._id,
+            department_name: dept.name,
+            department_code: dept.department_code,
+
+            title: g.title || dept.name,
+
+            total_members: total,
+            online_members: onlineCount,
+
+            last_message: g.last_message || "",
+            last_time: g.last_time || null,
+
+            // ✅ QUAN TRỌNG
+            unread_count: unreadCount,
+          });
+        }
+      }
+
+      return ok(res, [...privateChats, ...groupChats]);
+    } catch (e) {
+      console.error("getMyChatList error:", e);
+      return err(res, 500, "Lỗi khi lấy danh sách chat");
+    }
+  },
+
+
+  /**
+   * Lấy chi tiết chat riêng giữa tôi và 1 user khác
+   */
+  getChatDetail: async (req, res) => {
+    try {
+      const { peerId } = req.params;
+
+      const me = await User.findById(req.user.id)
+        .populate({
+          path: "private_chats.peer_id",
+          select: "full_name avatar online role employee_code job_title",
+        })
+        .select("private_chats");
+
+      if (!me) return err(res, 404, "User not found");
+
+      let chat = me.private_chats.find(
+        (c) => String(c.peer_id?._id) === String(peerId)
+      );
+
+      /* =========================
+         CHƯA CÓ CHAT → TẠO MỚI
+      ========================= */
+      if (!chat) {
+        const peer = await User.findById(peerId).select(
+          "full_name avatar online role employee_code job_title"
+        );
+        if (!peer) return err(res, 404, "Peer not found");
+
+        chat = {
+          peer_id: peer._id,
+          peer_name: peer.full_name,
+          peer_avatar: peer.avatar,
+          messages: [],
+          unread_count: 0,
+          last_message: "",
+          last_time: null,
+        };
+
+        me.private_chats.push(chat);
+        await me.save();
+
+        return ok(res, {
+          peer: {
+            id: peer._id,
+            full_name: peer.full_name,
+            avatar: peer.avatar,
+            online: peer.online,
+            role: peer.role,
+            employee_code: peer.employee_code,
+            job_title: peer.job_title,
+          },
+          messages: [],
+          unread_count: 0,
+          last_message: "",
+          last_time: null,
+        });
+      }
+
+      /* =========================
+         ĐÃ CÓ CHAT
+      ========================= */
+      const peer = chat.peer_id;
+
+      return ok(res, {
+        peer: {
+          id: peer?._id,
+          full_name: peer?.full_name,
+          avatar: peer?.avatar,
+          online: peer?.online,
+          role: peer?.role,
+          employee_code: peer?.employee_code,
+          job_title: peer?.job_title,
+        },
+        messages: chat.messages || [],
+        unread_count: chat.unread_count || 0,
+        last_message: chat.last_message || "",
+        last_time: chat.last_time || null,
+      });
+    } catch (e) {
+      console.error("getChatDetail error:", e);
+      return err(res, 500, "Lỗi khi lấy chi tiết chat");
+    }
+  },
+
+
+  /**
+   * Lấy chi tiết chat nhóm
+   */
+  getGroupChatDetail: async (req, res) => {
+    try {
+      const { groupId } = req.params; // ⚠️ groupId = departmentId
+
+      const department = await Department.findById(groupId)
+        .populate('users', 'full_name avatar online')
+        .lean();
+
+      if (!department) {
+        return err(res, 404, 'Department not found');
+      }
+
+      const group = department.group_chats?.[0];
+
+      if (!group) {
+        return err(res, 404, 'Group chat not found');
+      }
+
+      const members = Array.isArray(department.users)
+        ? department.users.map(u => ({
+          id: u._id,
+          name: u.full_name,
+          avatar: u.avatar || '',
+          online: !!u.online,
+        }))
+        : [];
+
+      return ok(res, {
+        department: {
+          id: department._id,
+          name: department.name,
+          department_code: department.department_code,
+        },
+        group: {
+          id: group._id,
+          last_message: group.last_message || '',
+          last_time: group.last_time || null,
+          messages: group.messages || [],
+        },
+        members,
+      });
+    } catch (e) {
+      console.error('getGroupChatDetail error:', e);
+      return err(res, 500, 'Lỗi khi lấy chi tiết group');
+    }
+  },
+
+
+  /**
+   * Gửi tin nhắn (user hoặc group)
+   */
+  sendMessage: async (req, res) => {
+    try {
+      const { type, id, text = "", image_urls = [] } = req.body;
+      const senderId = req.user.id;
+      const now = new Date();
+
+      // message dùng chung
+      const messageForMe = {
+        from_me: true,
+        text,
+        image_urls,
+        created_at: now,
+        is_seen: false,
+      };
+
+      const messageForPeer = {
+        from_me: false,
+        text,
+        image_urls,
+        created_at: now,
+        is_seen: false,
+      };
+
+      const lastMessage =
+        text || (image_urls.length ? "📷 Hình ảnh" : "");
+
+      /* =====================================================
+       * PRIVATE CHAT (USER ↔ USER)
+       * ===================================================== */
+      if (type === "user") {
+        const me = await User.findById(senderId);
+        const peer = await User.findById(id);
+        if (!peer) return err(res, 404, "Peer not found");
+
+        /* -------- CHAT CỦA TÔI -------- */
+        let chat = me.private_chats.find(
+          (c) => String(c.peer_id) === String(peer._id)
+        );
+
+        if (!chat) {
+          chat = {
+            peer_id: peer._id,
+            peer_name: peer.full_name,
+            peer_avatar: peer.avatar,
+            messages: [messageForMe], // ✅ message đầu tiên
+            last_message: lastMessage,
+            last_time: now,
+            unread_count: 0,
+          };
+          me.private_chats.push(chat);
+        } else {
+          chat.messages.push(messageForMe);
+          chat.last_message = lastMessage;
+          chat.last_time = now;
+        }
+
+        await me.save();
+
+        /* -------- CHAT CỦA NGƯỜI NHẬN -------- */
+        let peerChat = peer.private_chats.find(
+          (c) => String(c.peer_id) === String(me._id)
+        );
+
+        if (!peerChat) {
+          peerChat = {
+            peer_id: me._id,
+            peer_name: me.full_name,
+            peer_avatar: me.avatar,
+            messages: [messageForPeer], // ✅ message đầu tiên
+            last_message: lastMessage,
+            last_time: now,
+            unread_count: 1,
+          };
+          peer.private_chats.push(peerChat);
+        } else {
+          peerChat.messages.push(messageForPeer);
+          peerChat.last_message = lastMessage;
+          peerChat.last_time = now;
+          peerChat.unread_count = (peerChat.unread_count || 0) + 1;
+        }
+
+        await peer.save();
+        try {
+          await pushToUsers({
+            userIds: [peer._id],
+            title: `💬 ${me.full_name}`,
+            body: lastMessage,
+            type: "ChatList",
+            data: {
+           
+            },
+          });
+        } catch (e) {
+          console.error("Push chat failed:", e.message);
+        }
+
+
+        /* -------- 🔥 PING TOÀN SERVER -------- */
+        if (req.app.get("pingNsp")) {
+          req.app.get("pingNsp").emit("pinguser", {
+            type: "chat_update",
+            from: senderId,
+            to: id,
+          });
+        }
+
+        return ok(res, "Đã gửi tin nhắn");
+      }
+
+      /* =====================================================
+       * GROUP CHAT
+       * ===================================================== */
+      if (type === "group") {
+        // 🔑 id lúc này chính là departmentId
+        const department = await Department.findById(id);
+
+        if (!department) {
+          return err(res, 404, "Department not found");
+        }
+
+        // 🧩 Mỗi department chỉ có 1 group
+        const group = department.group_chats?.[0];
+        if (!group) {
+          return err(res, 404, "Group not found in department");
+        }
+
+        const now = new Date();
+
+        // 📩 Push message
+        group.messages.push({
+          sender_id: senderId,
+          sender_name: req.user.full_name,
+          sender_avatar: req.user.avatar,
+          text: text || '',
+          image_urls: image_urls || [],
+          created_at: now,
+          seen_by: [senderId],
+        });
+
+        // 🕒 Update last message
+        group.last_message =
+          text?.trim()
+            ? text
+            : image_urls?.length
+              ? '📷 Hình ảnh'
+              : '';
+
+        group.last_time = now;
+
+        await department.save();
+        try {
+          const receivers = department.users.filter(
+            u => String(u) !== String(senderId)
+          );
+
+          await pushToUsers({
+            userIds: receivers,
+            title: `💬 ${req.user.full_name}`,
+            body: group.last_message,
+            type: "ChatList",
+            data: { department_id: department._id },
+          });
+        } catch (e) {
+          console.error("Push group chat failed:", e.message);
+        }
+
+
+        /* -------- 🔥 SOCKET: GROUP UPDATE -------- */
+        const nsp = req.app.get("pingNsp");
+        if (nsp) {
+          nsp.emit("pinguser", {
+            type: "group_chat_update",
+            departmentId: department._id,
+          });
+        }
+
+        return ok(res, {
+          message: "Đã gửi tin nhắn nhóm",
+          department_id: department._id,
+        });
+      }
+
+
+      return err(res, 400, "Type không hợp lệ");
+    } catch (e) {
+      console.error("sendMessage error:", e);
+      return err(res, 500, "Lỗi khi gửi tin nhắn");
+    }
+  },
+
+
+  /**
+   * Đánh dấu đã đọc (user hoặc group)
+   */
+  markSeen: async (req, res) => {
+    try {
+      const { type, id } = req.body; // id = peerId | departmentId
+      const userId = String(req.user.id);
+
+      /* =========================
+         PRIVATE CHAT
+      ========================= */
+      if (type === "user") {
+        const me = await User.findById(userId);
+
+        if (me) {
+          const chat = me.private_chats?.find(
+            (c) => String(c.peer_id) === String(id)
+          );
+
+          if (chat) {
+            chat.messages.forEach((m) => {
+              m.is_seen = true;
+            });
+            chat.unread_count = 0;
+            await me.save();
+          }
+        }
+
+        // ✅ DÙ CÓ / KHÔNG CÓ CHAT → VẪN OK
+        return ok(res, {
+          success: true,
+          type: "user",
+          peer_id: id,
+        });
+      }
+
+      /* =========================
+         GROUP CHAT (BY DEPARTMENT ID)
+      ========================= */
+      if (type === "group") {
+        const department = await Department.findById(id);
+
+        if (department && department.group_chats?.[0]) {
+          const group = department.group_chats[0];
+
+          let updatedCount = 0;
+
+          for (const m of group.messages) {
+            const seenList = (m.seen_by || []).map(String);
+            if (!seenList.includes(userId)) {
+              m.seen_by.push(userId);
+              updatedCount++;
+            }
+          }
+
+          if (updatedCount > 0) {
+            await department.save();
+          }
+
+          return ok(res, {
+            success: true,
+            type: "group",
+            department_id: id,
+            updated_count: updatedCount,
+          });
+        }
+
+        // ❗ Không có group → vẫn OK
+        return ok(res, {
+          success: true,
+          type: "group",
+          department_id: id,
+          updated_count: 0,
+        });
+      }
+
+      // ❗ Type lạ → vẫn OK (fail-safe cho FE)
+      return ok(res, {
+        success: true,
+        message: "No action",
+      });
+    } catch (e) {
+      console.error("markSeen error:", e);
+
+      // ❗ LỖI SERVER → VẪN OK (đúng yêu cầu bạn)
+      return ok(res, {
+        success: true,
+        message: "Handled with error but marked as success",
+      });
+    }
+  },
+
 
   // ===================== GET ME (CURRENT USER) =====================
   getMe: async (req, res) => {
@@ -206,7 +1206,7 @@ module.exports = {
       }
 
       // -------- RANDOM PASSWORD --------
-      const rawPassword = crypto.randomBytes(6).toString("base64");
+      const rawPassword = crypto.randomBytes(6).toString("hex");
 
       // -------- TẠO USER --------
       const newUser = await User.create({
@@ -579,11 +1579,12 @@ module.exports.checkAttendance = async (req, res) => {
   try {
     const { type, face_id, image } = req.body;
 
-    if (!["check_in", "check_out"].includes(type))
+    if (!["check_in", "check_out"].includes(type)) {
       return err(res, 400, "Loại check không hợp lệ");
+    }
 
     const user = await User.findById(req.user.id).select(
-      "+face_id +location_session_token +location_session_expires"
+      "+face_id +location_session_token +location_session_expires +attendance_logs"
     );
 
     if (!user) return err(res, 404, "Không tìm thấy user");
@@ -601,48 +1602,70 @@ module.exports.checkAttendance = async (req, res) => {
     // FACE VERIFY
     const dbVec = JSON.parse(user.face_id);
     const sim = cosineSimilarity(dbVec, face_id);
-
-    if (sim < 0.45)
+    if (sim < 0.45) {
       return err(res, 400, `Face không khớp (sim=${sim.toFixed(2)})`);
-
-    // Attendance logic
-    const today = new Date().toISOString().split("T")[0];
-    const now = new Date();
-    const time = now.toTimeString().slice(0, 5);
-
-    let logs = user.attendance_logs || [];
-    let todayLog = logs.find((l) => l.date === today);
-
-    // CHECK IN
-    if (type === "check_in") {
-      if (todayLog?.check_in_time)
-        return err(res, 400, "Hôm nay đã check-in rồi");
-
-      logs.push({
-        date: today,
-        check_in_time: time,
-        check_in_image: image,
-        created_at: now,
-      });
     }
 
-    // CHECK OUT
+    // ===== Attendance logic =====
+    const today = new Date().toISOString().split("T")[0];
+    const time = new Date().toTimeString().slice(0, 5);
+
+    let logs = user.attendance_logs || [];
+    let todayLog = logs.find(l => l.date === today);
+
+    const calcTotalHours = (log) => {
+      if (!log?.check_in_time || !log?.check_out_time) return null;
+      const start = new Date(`${today}T${log.check_in_time}:00`);
+      const end = new Date(`${today}T${log.check_out_time}:00`);
+      return Math.round(((end - start) / 36e5) * 100) / 100;
+    };
+
+    // ===== CHECK IN =====
+    if (type === "check_in") {
+      if (todayLog?.check_in_time) {
+        return err(res, 400, "Hôm nay đã check-in rồi");
+      }
+
+      if (!todayLog) {
+        todayLog = {
+          date: today,
+          check_in_time: time,
+          check_in_image: image,
+        };
+        logs.push(todayLog);
+      } else {
+        todayLog.check_in_time = time;
+        todayLog.check_in_image = image;
+      }
+
+      const hours = calcTotalHours(todayLog);
+      if (hours !== null) {
+        todayLog.total_hours = hours;
+      }
+    }
+
+    // ===== CHECK OUT =====
     if (type === "check_out") {
-      if (!todayLog?.check_in_time)
-        return err(res, 400, "Chưa check-in hôm nay");
-
-      if (todayLog.check_out_time)
+      if (todayLog?.check_out_time) {
         return err(res, 400, "Đã check-out rồi");
+      }
 
-      todayLog.check_out_time = time;
-      todayLog.check_out_image = image;
+      if (!todayLog) {
+        todayLog = {
+          date: today,
+          check_out_time: time,
+          check_out_image: image,
+        };
+        logs.push(todayLog);
+      } else {
+        todayLog.check_out_time = time;
+        todayLog.check_out_image = image;
+      }
 
-      // Tính giờ
-      const start = new Date(`${today}T${todayLog.check_in_time}:00`);
-      const end = new Date(`${today}T${time}:00`);
-      const hours = (end - start) / (1000 * 60 * 60);
-
-      todayLog.total_hours = Math.round(hours * 100) / 100;
+      const hours = calcTotalHours(todayLog);
+      if (hours !== null) {
+        todayLog.total_hours = hours;
+      }
     }
 
     // Clear location session
@@ -656,13 +1679,14 @@ module.exports.checkAttendance = async (req, res) => {
       success: true,
       type,
       similarity: sim,
-      log: todayLog || logs.at(-1),
+      log: todayLog,
     });
   } catch (e) {
     console.error(e);
     return err(res, 500, e.message);
   }
 };
+
 
 /* =========================
    Helpers
@@ -744,96 +1768,661 @@ function hasOverlapPendingOrApproved(user, start_date, end_date) {
 }
 
 /* =========================================================
-   USER: LEAVE
+   USER: CREATE LEAVE REQUEST
 ========================================================= */
-
-// POST /api/requests/leave
 module.exports.createLeaveRequest = async (req, res) => {
   try {
-    const { type, start_date, end_date, reason = "", evidence_images = [] } = req.body;
+    const {
+      type,
+      start_date,
+      end_date,
+      day_type = "full", // full | half
+      reason = "",
+      evidence_images = [],
+    } = req.body;
 
-    if (!type || !start_date || !end_date) {
-      return err(res, 400, "Thiếu type/start_date/end_date");
-    }
-    if (!["annual", "sick", "unpaid"].includes(type)) {
-      return err(res, 400, "Loại nghỉ không hợp lệ");
-    }
+    if (!type || !start_date || !end_date)
+      return err(res, 400, "Thiếu dữ liệu");
 
-    const user = await User.findById(req.user.id).select("company_id leave_requests record_status");
-    if (!user || user.record_status !== 1) return err(res, 404, "User không tồn tại");
-
-    if (!user.company_id) return err(res, 400, "User chưa thuộc công ty");
-
-    const company = await Company.findById(user.company_id).select("attendance_config");
-    if (!company?.attendance_config) return err(res, 400, "Company chưa cấu hình attendance");
-
-    const config = company.attendance_config;
-
-    // validate range & working days count
-    const dates = enumerateDatesInclusive(start_date, end_date);
-    if (dates.length === 0) return err(res, 400, "Khoảng ngày không hợp lệ");
-
-    const reqWorkingDays = countWorkingDays(dates, config);
-    if (reqWorkingDays <= 0) {
-      return err(res, 400, "Khoảng ngày này không có ngày làm việc hợp lệ (vướng holiday/offday)");
-    }
-
-    // prevent overlap
-    if (hasOverlapPendingOrApproved(user, start_date, end_date)) {
-      return err(res, 400, "Khoảng ngày xin nghỉ bị trùng với đơn pending/approved khác");
-    }
-
-    // annual quota check
-    if (type === "annual") {
-      const maxDays = Number(config?.leave_policy?.annual_leave_days || 0);
-      const used = sumApprovedAnnualDays(user, config);
-      const remaining = Math.max(0, maxDays - used);
-
-      if (reqWorkingDays > remaining) {
-        return err(
-          res,
-          400,
-          `Hết/không đủ phép năm (còn ${remaining} ngày làm việc). Hãy chọn nghỉ không lương (unpaid).`
-        );
-      }
-    }
+    const user = await User.findById(req.user.id).select(
+      "company_id leave_requests record_status"
+    );
+    if (!user || user.record_status !== 1)
+      return err(res, 404, "User không tồn tại");
 
     user.leave_requests.push({
       type,
       start_date,
       end_date,
+      day_type,
       reason,
       evidence_images,
       status: "pending",
       admin_note: "",
+      approved_by: null,
+      approved_at: null,
       created_at: new Date(),
     });
 
     await user.save();
-    return ok(res, {}, "Tạo phiếu nghỉ phép thành công");
+    try {
+      const admins = await User.find({
+        company_id: user.company_id,
+        role: { $in: ["admin"] },
+        record_status: 1,
+      }).select("_id");
+
+      await pushToUsers({
+        userIds: admins.map(a => a._id),
+        title: "📄 Đơn nghỉ phép mới",
+        body: `Bạn có đơn nghỉ phép mới cần duyệt`,
+        type: "LeaveRequests",
+        data: { user_id: user },
+      });
+    } catch (e) {
+      console.error("Push leave request failed:", e.message);
+    }
+    return ok(res, {}, "Tạo đơn nghỉ phép thành công");
   } catch (e) {
-    console.error("createLeaveRequest:", e);
-    return err(res, 500, e?.message || "Create leave failed");
+    return err(res, 500, e.message);
   }
 };
 
-// GET /api/requests/leave/me
+/* =========================================================
+   USER: GET MY LEAVE REQUESTS
+========================================================= */
 module.exports.getMyLeaveRequests = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("leave_requests record_status");
-    if (!user || user.record_status !== 1) return err(res, 404, "User không tồn tại");
+    const user = await User.findById(req.user.id)
+      .select(`
+        full_name
+        email
+        employee_code
+        avatar
+        job_title
+        role
+        department_id
+        leave_requests
+        record_status
+      `)
+      .populate("department_id", "name department_code")
+      .lean();
 
-    // sort newest first
-    const items = (user.leave_requests || []).slice().sort((a, b) => {
-      return new Date(b.created_at) - new Date(a.created_at);
+    if (!user || user.record_status !== 1) {
+      return err(res, 404, "User không tồn tại");
+    }
+
+    const result = [];
+
+    for (const leave of user.leave_requests || []) {
+      result.push({
+        /* ================= USER INFO ================= */
+        user: {
+          user_id: user._id,
+          full_name: user.full_name,
+          email: user.email,
+          employee_code: user.employee_code,
+          avatar: user.avatar || null,
+          job_title: user.job_title || null,
+          role: user.role,
+          department: user.department_id
+            ? {
+              id: user.department_id._id,
+              name: user.department_id.name,
+              code: user.department_id.department_code,
+            }
+            : null,
+        },
+
+        /* ================= LEAVE INFO ================= */
+        leave: {
+          leave_id: leave._id,
+          type: leave.type, // annual | sick | unpaid
+          start_date: leave.start_date,
+          end_date: leave.end_date,
+          day_type: leave.day_type,
+          reason: leave.reason,
+          evidence_images: leave.evidence_images || [],
+
+          status: leave.status,
+          admin_note: leave.admin_note || "",
+
+          approved_by: leave.approved_by
+            ? {
+              user_id: leave.approved_by.user_id,
+              full_name: leave.approved_by.full_name,
+              avatar: leave.approved_by.avatar,
+              role: leave.approved_by.role,
+            }
+            : null,
+
+          approved_at: leave.approved_at,
+          created_at: leave.created_at,
+        },
+      });
+    }
+
+    // newest first
+    result.sort(
+      (a, b) =>
+        new Date(b.leave.created_at) -
+        new Date(a.leave.created_at)
+    );
+
+    return ok(res, {
+      leave_requests: result,
+      total: result.length,
     });
-
-    return ok(res, { leave_requests: items });
   } catch (e) {
     console.error("getMyLeaveRequests:", e);
-    return err(res, 500, e?.message || "Get leave requests failed");
+    return err(res, 500, e?.message || "Get my leave requests failed");
   }
 };
+
+/* =========================================================
+   ADMIN: GET PENDING LEAVE REQUESTS
+========================================================= */
+module.exports.adminGetPendingLeaveRequests = async (req, res) => {
+  const admin = await User.findById(req.user.id).select("company_id");
+  const users = await User.find({ company_id: admin.company_id })
+    .select("leave_requests full_name email employee_code");
+
+  const result = [];
+  users.forEach(u => {
+    u.leave_requests.forEach(r => {
+      if (r.status === "pending") {
+        result.push({
+          user_id: u._id,
+          full_name: u.full_name,
+          email: u.email,
+          employee_code: u.employee_code,
+          leave: r,
+        });
+      }
+    });
+  });
+
+  return ok(res, { leave_requests: result });
+};
+
+/* =========================================================
+   ADMIN: DECIDE LEAVE REQUEST
+========================================================= */
+module.exports.adminDecideLeaveRequest = async (req, res) => {
+  try {
+    const { userId, leaveId } = req.params;
+    const { status, admin_note = "" } = req.body;
+
+    if (!["approved", "rejected"].includes(status)) {
+      return err(res, 400, "Status không hợp lệ");
+    }
+
+    /* ================= ADMIN ================= */
+    const admin = await User.findById(req.user.id).select(
+      "full_name avatar role company_id"
+    );
+    if (!admin) return err(res, 404, "Admin không tồn tại");
+
+    /* ================= USER ================= */
+    const user = await User.findOne({
+      _id: userId,
+      company_id: admin.company_id,
+      record_status: 1,
+    }).select(
+      "leave_requests annual_leave_used paid_leave_used total_leave_used"
+    );
+
+    if (!user)
+      return err(res, 404, "User không tồn tại trong công ty");
+
+    /* ================= LEAVE ================= */
+    const leave = user.leave_requests.id(leaveId);
+    if (!leave) return err(res, 404, "Không tìm thấy đơn nghỉ");
+
+    if (leave.status !== "pending") {
+      return err(res, 400, "Đơn nghỉ đã được xử lý");
+    }
+
+    /* ================= CALC DAYS (FIX) ================= */
+    const start = new Date(leave.start_date);
+    const end = new Date(leave.end_date);
+
+    const diffDays =
+      Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
+
+    let dayUsed = 0;
+
+    if (diffDays === 1) {
+      dayUsed = leave.day_type === "full" ? 1 : 0.5;
+    } else {
+      dayUsed = diffDays;
+    }
+
+    /* ================= APPROVE ================= */
+    if (status === "approved") {
+      // tổng nghỉ
+      user.total_leave_used =
+        Number(user.total_leave_used || 0) + dayUsed;
+
+      // nghỉ có lương
+      if (leave.type === "annual" || leave.type === "sick") {
+        user.paid_leave_used =
+          Number(user.paid_leave_used || 0) + dayUsed;
+      }
+
+      // phép năm
+      if (leave.type === "annual") {
+        user.annual_leave_used =
+          Number(user.annual_leave_used || 0) + dayUsed;
+      }
+
+      leave.approved_at = new Date();
+      leave.approved_by = {
+        user_id: admin._id,
+        full_name: admin.full_name,
+        avatar: admin.avatar,
+        role: admin.role,
+      };
+    }
+
+    /* ================= REJECT ================= */
+    if (status === "rejected") {
+      leave.approved_at = new Date();
+      leave.approved_by = {
+        user_id: admin._id,
+        full_name: admin.full_name,
+        avatar: admin.avatar,
+        role: admin.role,
+      };
+    }
+
+    leave.status = status;
+    leave.admin_note = admin_note;
+
+    await user.save();
+    try {
+      await pushToUsers({
+        userIds: [user._id],
+        title:
+          status === "approved"
+            ? "✅ Đơn nghỉ phép được duyệt"
+            : "❌ Đơn nghỉ phép bị từ chối",
+        body: admin_note || "Vui lòng xem chi tiết",
+        type: "LeaveRecord",
+        data: { leave_id: leave._id },
+      });
+    } catch (e) {
+      console.error("Push leave decision failed:", e.message);
+    }
+
+    return ok(
+      res,
+      {
+        annual_leave_used: user.annual_leave_used,
+        paid_leave_used: user.paid_leave_used,
+        total_leave_used: user.total_leave_used,
+      },
+      "Đã xử lý đơn nghỉ phép"
+    );
+  } catch (e) {
+    console.error("adminDecideLeaveRequest:", e);
+    return err(res, 500, e?.message || "Decide leave failed");
+  }
+};
+
+
+/* =========================================================
+   ADMIN: GET ALL LEAVE REQUESTS
+========================================================= */
+/* =========================================================
+   ADMIN: GET ALL LEAVE REQUESTS (FULL FORMAT)
+========================================================= */
+module.exports.adminGetAllLeaveRequests = async (req, res) => {
+  try {
+    const admin = await User.findById(req.user.id).select(
+      "company_id record_status"
+    );
+
+    if (!admin || admin.record_status !== 1)
+      return err(res, 404, "Admin không tồn tại");
+
+    if (!admin.company_id)
+      return err(res, 403, "Bạn không thuộc công ty nào");
+
+    const statusFilter = req.query.status || "all";
+
+    const users = await User.find({
+      company_id: admin.company_id,
+      record_status: 1,
+    })
+      .select(`
+        full_name
+        email
+        employee_code
+        avatar
+        job_title
+        role
+        department_id
+        leave_requests
+      `)
+      .populate("department_id", "name department_code")
+      .lean();
+
+    const result = [];
+
+    for (const u of users) {
+      for (const leave of u.leave_requests || []) {
+        if (statusFilter !== "all" && leave.status !== statusFilter) continue;
+
+        result.push({
+          /* ================= USER INFO ================= */
+          user: {
+            user_id: u._id,
+            full_name: u.full_name,
+            email: u.email,
+            employee_code: u.employee_code,
+            avatar: u.avatar || null,
+            job_title: u.job_title || null,
+            role: u.role,
+            department: u.department_id
+              ? {
+                id: u.department_id._id,
+                name: u.department_id.name,
+                code: u.department_id.department_code,
+              }
+              : null,
+          },
+
+          /* ================= LEAVE INFO ================= */
+          leave: {
+            leave_id: leave._id,
+            type: leave.type, // annual | sick | unpaid
+            start_date: leave.start_date,
+            end_date: leave.end_date,
+            day_type: leave.day_type,
+            reason: leave.reason,
+            evidence_images: leave.evidence_images || [],
+
+            status: leave.status,
+            admin_note: leave.admin_note || "",
+
+            approved_by: leave.approved_by
+              ? {
+                user_id: leave.approved_by.user_id,
+                full_name: leave.approved_by.full_name,
+                avatar: leave.approved_by.avatar,
+                role: leave.approved_by.role,
+              }
+              : null,
+
+            approved_at: leave.approved_at,
+            created_at: leave.created_at,
+          },
+        });
+      }
+    }
+
+    // newest first
+    result.sort(
+      (a, b) =>
+        new Date(b.leave.created_at) - new Date(a.leave.created_at)
+    );
+
+    return ok(res, {
+      leave_requests: result,
+      total: result.length,
+    });
+  } catch (e) {
+    console.error("adminGetAllLeaveRequests:", e);
+    return err(res, 500, e?.message || "Get all leave requests failed");
+  }
+};
+
+
+/* =========================================================
+   USER: CREATE CHECKIN COMPLAINT
+========================================================= */
+module.exports.createCheckinComplaint = async (req, res) => {
+  try {
+    const {
+      date,
+      type, // check_in | check_out
+      expected_time,
+      actual_time,
+      reason,
+      evidence_images = [],
+    } = req.body;
+
+    if (!date || !type)
+      return err(res, 400, "Thiếu dữ liệu");
+
+    const user = await User.findById(req.user.id).select(
+      "checkin_complaints record_status company_id"
+    );
+    if (!user || user.record_status !== 1)
+      return err(res, 404, "User không tồn tại");
+
+    user.checkin_complaints.push({
+      date,
+      action: type,          // ✅ map đúng
+      time: actual_time,     // ✅ map đúng
+      reason,
+      evidence_images,
+      status: "pending",
+      admin_note: "",
+      approved_at: null,
+      created_at: new Date(),
+    });
+
+
+    await user.save();
+    try {
+      const admins = await User.find({
+        company_id: user.company_id,
+        role: { $in: ["admin"] },
+        record_status: 1,
+      }).select("_id");
+      console.log("COMPANY", user)
+      await pushToUsers({
+        userIds: admins.map(a => a._id),
+        title: "⚠️ Khiếu nại chấm công",
+        body: `Bạn có khiếu nại ngày ${date}`,
+        type: "ComplaintRequests",
+        data: { user_id: user._id },
+      });
+    } catch (e) {
+      console.error("Push complaint failed:", e.message);
+    }
+
+    return ok(res, {}, "Gửi khiếu nại thành công");
+  } catch (e) {
+    return err(res, 500, e.message);
+  }
+};
+
+/* =========================================================
+   USER: GET MY CHECKIN COMPLAINTS
+========================================================= */
+module.exports.getMyCheckinComplaints = async (req, res) => {
+  const user = await User.findById(req.user.id).select("checkin_complaints");
+  return ok(res, {
+    checkin_complaints: user.checkin_complaints || [],
+    total: user.checkin_complaints.length,
+  });
+};
+
+/* =========================================================
+   ADMIN: GET PENDING CHECKIN COMPLAINTS
+========================================================= */
+module.exports.adminGetPendingCheckinComplaints = async (req, res) => {
+  const admin = await User.findById(req.user.id).select("company_id");
+
+  const users = await User.find({ company_id: admin.company_id })
+    .select("checkin_complaints full_name email employee_code");
+
+  const result = [];
+  users.forEach(u => {
+    u.checkin_complaints.forEach(c => {
+      if (c.status === "pending") {
+        result.push({
+          user_id: u._id,
+          full_name: u.full_name,
+          email: u.email,
+          employee_code: u.employee_code,
+          complaint: c,
+        });
+      }
+    });
+  });
+
+  return ok(res, { checkin_complaints: result });
+};
+
+/* =========================================================
+   ADMIN: DECIDE CHECKIN COMPLAINT
+========================================================= */
+module.exports.adminDecideCheckinComplaint = async (req, res) => {
+  const { userId, complaintId } = req.params;
+  const { status, admin_note = "" } = req.body;
+
+  const admin = await User.findById(req.user.id);
+  const user = await User.findById(userId);
+
+  const c = user.checkin_complaints.id(complaintId);
+  if (!c) return err(res, 404, "Không tìm thấy khiếu nại");
+
+  c.status = status;
+  c.admin_note = admin_note;
+  c.approved_at = new Date();
+  c.approved_by = {
+    user_id: admin._id,
+    full_name: admin.full_name,
+    avatar: admin.avatar,
+    role: admin.role,
+  };
+
+  await user.save();
+  try {
+    await pushToUsers({
+      userIds: [user._id],
+      title:
+        status === "approved"
+          ? "✅ Khiếu nại được chấp nhận"
+          : "❌ Khiếu nại bị từ chối",
+      body: admin_note || "Vui lòng xem chi tiết",
+      type: "checkin_complaint_decision",
+      data: { complaint_id: c._id },
+    });
+  } catch (e) {
+    console.error("Push complaint decision failed:", e.message);
+  }
+
+  return ok(res, {}, "Đã xử lý khiếu nại");
+};
+
+/* =========================================================
+   ADMIN: GET ALL CHECKIN COMPLAINTS
+========================================================= */
+
+/* =========================================================
+   ADMIN: GET ALL CHECK-IN COMPLAINTS (FULL FORMAT)
+========================================================= */
+module.exports.adminGetAllCheckinComplaints = async (req, res) => {
+  try {
+    const admin = await User.findById(req.user.id).select(
+      "company_id record_status"
+    );
+
+    if (!admin || admin.record_status !== 1)
+      return err(res, 404, "Admin không tồn tại");
+
+    if (!admin.company_id)
+      return err(res, 403, "Bạn không thuộc công ty nào");
+
+    const statusFilter = req.query.status || "all";
+
+    const users = await User.find({
+      company_id: admin.company_id,
+      record_status: 1,
+    })
+      .select(`
+        full_name
+        email
+        employee_code
+        avatar
+        job_title
+        role
+        department_id
+        checkin_complaints
+      `)
+      .populate("department_id", "name department_code")
+      .lean();
+
+    const result = [];
+
+    for (const u of users) {
+      for (const c of u.checkin_complaints || []) {
+        if (statusFilter !== "all" && c.status !== statusFilter) continue;
+
+        result.push({
+          /* ================= USER ================= */
+          user: {
+            user_id: u._id,
+            full_name: u.full_name,
+            email: u.email,
+            employee_code: u.employee_code,
+            avatar: u.avatar || null,
+            job_title: u.job_title || null,
+            role: u.role,
+            department: u.department_id
+              ? {
+                id: u.department_id._id,
+                name: u.department_id.name,
+                code: u.department_id.department_code,
+              }
+              : null,
+          },
+
+          /* ================= COMPLAINT ================= */
+          complaint: {
+            complaint_id: c._id,
+
+            date: c.date,
+            action: c.action,           // ✅ check_in | check_out
+            time: c.time,               // ✅ unified time
+
+            reason: c.reason,
+            evidence_images: c.evidence_images || [],
+
+            status: c.status,
+            admin_note: c.admin_note || "",
+
+            approved_at: c.approved_at || null,
+            created_at: c.created_at,
+          },
+        });
+      }
+    }
+
+    // newest first
+    result.sort(
+      (a, b) =>
+        new Date(b.complaint.created_at) -
+        new Date(a.complaint.created_at)
+    );
+
+    return ok(res, {
+      checkin_complaints: result,
+      total: result.length,
+    });
+  } catch (e) {
+    console.error("adminGetAllCheckinComplaints:", e);
+    return err(res, 500, e?.message || "Get all checkin complaints failed");
+  }
+};
+
+
+
 /* =========================================================
    USER: CREATE OVERTIME REQUEST
 ========================================================= */
@@ -920,6 +2509,25 @@ module.exports.createOvertimeRequest = async (req, res) => {
     });
 
     await user.save();
+
+    try {
+      const admins = await User.find({
+        company_id: user.company_id,
+        role: { $in: ["admin"] },
+        record_status: 1,
+      }).select("_id");
+
+      await pushToUsers({
+        userIds: admins.map(a => a._id),
+        title: "⏱️ Yêu cầu OT mới",
+        body: `Bạn có yêu cầu OT ngày ${date}`,
+        type: "OTRequest",
+        data: { user_id: user._id },
+      });
+    } catch (e) {
+      console.error("Push OT request failed:", e.message);
+    }
+
     return ok(res, {}, "Tạo phiếu OT thành công");
   } catch (e) {
     console.error("createOvertimeRequest:", e);
@@ -932,23 +2540,90 @@ module.exports.createOvertimeRequest = async (req, res) => {
 ========================================================= */
 module.exports.getMyOvertimeRequests = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select(
-      "overtime_logs record_status"
-    );
+    const user = await User.findById(req.user.id)
+      .select(`
+        full_name
+        email
+        employee_code
+        avatar
+        job_title
+        role
+        department_id
+        overtime_logs
+        record_status
+      `)
+      .populate("department_id", "name department_code")
+      .lean();
+
     if (!user || user.record_status !== 1) {
       return err(res, 404, "User không tồn tại");
     }
 
-    const items = (user.overtime_logs || [])
-      .slice()
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const result = [];
 
-    return ok(res, { overtime_logs: items });
+    for (const ot of user.overtime_logs || []) {
+      result.push({
+        /* ================= USER INFO ================= */
+        user: {
+          user_id: user._id,
+          full_name: user.full_name,
+          email: user.email,
+          employee_code: user.employee_code,
+          avatar: user.avatar || null,
+          job_title: user.job_title || null,
+          role: user.role,
+          department: user.department_id
+            ? {
+              id: user.department_id._id,
+              name: user.department_id.name,
+              code: user.department_id.department_code,
+            }
+            : null,
+        },
+
+        /* ================= OT INFO ================= */
+        ot: {
+          ot_id: ot._id,
+          date: ot.date,
+          start_time: ot.start_time || null,
+          hours: ot.hours,
+          reason: ot.reason,
+          evidence_images: ot.evidence_images || [],
+
+          status: ot.status,
+          admin_note: ot.admin_note || "",
+
+          approved_by: ot.approved_by
+            ? {
+              user_id: ot.approved_by.user_id,
+              full_name: ot.approved_by.full_name,
+              avatar: ot.approved_by.avatar,
+              role: ot.approved_by.role,
+            }
+            : null,
+
+          approved_at: ot.approved_at,
+          created_at: ot.created_at,
+        },
+      });
+    }
+
+    // newest first
+    result.sort(
+      (a, b) => new Date(b.ot.created_at) - new Date(a.ot.created_at),
+    );
+
+    return ok(res, {
+      overtime_requests: result,
+      total: result.length,
+    });
   } catch (e) {
     console.error("getMyOvertimeRequests:", e);
     return err(res, 500, e?.message || "Get overtime logs failed");
   }
 };
+
+
 
 /* =========================================================
    ADMIN: LIST PENDING REQUESTS
@@ -1089,6 +2764,21 @@ module.exports.adminDecideOvertimeRequest = async (req, res) => {
     };
 
     await user.save();
+    try {
+      await pushToUsers({
+        userIds: [user._id],
+        title:
+          status === "approved"
+            ? "✅ OT được duyệt"
+            : "❌ OT bị từ chối",
+        body: admin_note || "Vui lòng xem chi tiết",
+        type: "OTRecord",
+        data: { ot_id: ot._id },
+      });
+    } catch (e) {
+      console.error("Push OT decision failed:", e.message);
+    }
+
     return ok(res, {}, "Cập nhật phiếu OT thành công");
   } catch (e) {
     console.error("adminDecideOvertimeRequest:", e);
@@ -1146,10 +2836,10 @@ module.exports.adminGetAllOvertimeRequests = async (req, res) => {
             role: u.role,
             department: u.department_id
               ? {
-                  id: u.department_id._id,
-                  name: u.department_id.name,
-                  code: u.department_id.department_code,
-                }
+                id: u.department_id._id,
+                name: u.department_id.name,
+                code: u.department_id.department_code,
+              }
               : null,
           },
 
@@ -1167,11 +2857,11 @@ module.exports.adminGetAllOvertimeRequests = async (req, res) => {
 
             approved_by: ot.approved_by
               ? {
-                  user_id: ot.approved_by.user_id,
-                  full_name: ot.approved_by.full_name,
-                  avatar: ot.approved_by.avatar,
-                  role: ot.approved_by.role,
-                }
+                user_id: ot.approved_by.user_id,
+                full_name: ot.approved_by.full_name,
+                avatar: ot.approved_by.avatar,
+                role: ot.approved_by.role,
+              }
               : null,
 
             approved_at: ot.approved_at,
@@ -1193,5 +2883,144 @@ module.exports.adminGetAllOvertimeRequests = async (req, res) => {
   } catch (e) {
     console.error("adminGetAllOvertimeRequests:", e);
     return err(res, 500, e?.message || "Get all overtime failed");
+  }
+};
+
+
+module.exports.addOrUpdateDevice = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const {
+      device_id,
+      fcm_token,
+      platform,
+      device_name,
+      app_version,
+    } = req.body;
+
+    if (!device_id || !fcm_token || !platform) {
+      return res.status(400).json({ error: "Missing device_id / fcm_token / platform" });
+    }
+
+    // 1️⃣ đảm bảo device chỉ thuộc 1 user
+    await User.updateMany(
+      { "devices.device_id": device_id },
+      { $pull: { devices: { device_id } } }
+    );
+
+    // 2️⃣ update nếu đã tồn tại
+    const updated = await User.updateOne(
+      { _id: userId, "devices.device_id": device_id },
+      {
+        $set: {
+          "devices.$.fcm_token": fcm_token,
+          "devices.$.platform": platform,
+          "devices.$.device_name": device_name,
+          "devices.$.app_version": app_version,
+          "devices.$.is_active": true,
+          "devices.$.last_login": new Date(),
+        },
+      }
+    );
+
+    // 3️⃣ chưa có thì push mới
+    if (updated.matchedCount === 0) {
+      await User.updateOne(
+        { _id: userId },
+        {
+          $push: {
+            devices: {
+              device_id,
+              fcm_token,
+              platform,
+              device_name,
+              app_version,
+              is_active: true,
+              last_login: new Date(),
+              created_at: new Date(),
+            },
+          },
+        }
+      );
+    }
+
+    return res.json({ message: "Device registered" });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+module.exports.removeDevice = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { deviceId } = req.params;
+
+    await User.updateOne(
+      { _id: userId },
+      { $pull: { devices: { device_id: deviceId } } }
+    );
+
+    return res.json({ message: "Device removed" });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+// GET /me/notifications?page=1&limit=20
+module.exports.getMyNotifications = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 1000);
+
+    const user = await User.findById(userId)
+      .select("notifications")
+      .lean();
+
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const notifications = user.notifications || [];
+
+    // sort mới -> cũ
+    notifications.sort(
+      (a, b) => new Date(b.created_at) - new Date(a.created_at)
+    );
+
+    const total = notifications.length;
+    const unread_count = notifications.filter(n => !n.is_read).length;
+
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    const data = notifications.slice(start, end);
+
+    return res.json({
+      page,
+      limit,
+      total,
+      unread_count,
+      data,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+// PATCH /me/notifications/seen-all
+module.exports.seenAllNotifications = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    await User.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          "notifications.$[].is_read": true,
+          "notifications.$[].read_at": new Date(),
+        },
+      }
+    );
+
+    return res.json({ message: "All notifications marked as read" });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 };
