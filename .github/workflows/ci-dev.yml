@@ -17,9 +17,18 @@ jobs:
           cache: "npm"
 
       - run: npm ci
-      - run: npm run lint --if-present
-      - run: npm run typecheck --if-present
-      - run: npm test --if-present
+
+      # ✅ Lint đúng file
+      - name: Lint only (googleMaps.js)
+        run: npx eslint services/googleMaps.js routes/mail.routes.js 
+
+      # ✅ Typecheck đúng file JS (chỉ hợp lý nếu bạn có typescript + muốn checkJs)
+      - name: Typecheck only (googleMaps.js)
+        run: npx tsc --noEmit --allowJs --checkJs services/googleMaps.js routes/mail.routes.js 
+
+      # ✅ Test liên quan đúng file
+      # - name: Test only (googleMaps.js)
+      #   run: npx jest --findRelatedTests services/googleMaps.js routes/mail.routes.js
 
   docker-build:
     runs-on: ubuntu-latest

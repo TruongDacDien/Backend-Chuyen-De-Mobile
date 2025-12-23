@@ -34,20 +34,12 @@ async function createCompanyFromBody(body) {
     throw new Error("Thiếu thông tin công ty bắt buộc");
   }
 
-  const existed = await Company.findOne({
-    $or: [
-      { name: company_name },
-      { contact_email: company_email },
-      { contact_phone: company_phone },
-    ],
-    record_status: 1,
-  });
-
-  if (existed) return existed;
-
   return Company.create({
     name: company_name,
-    code: company_name.toLowerCase().replace(/\s+/g, "-"),
+    code: company_name
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, "-"),
     address: company_address,
     contact_email: company_email,
     contact_phone: company_phone,
@@ -55,6 +47,7 @@ async function createCompanyFromBody(body) {
     images: Array.isArray(body.company_images) ? body.company_images : [],
   });
 }
+
 
 // ============================
 // REGISTER (NO VERIFY SERVICE)
@@ -84,75 +77,108 @@ async function registerNoVerifyService(input) {
 
 module.exports = {
   // 🔐 REGISTER + COMPANY
-  register: async (req, res) => {
-    try {
-      const {
+ register: async (req, res) => {
+  try {
+    console.log("===== REGISTER START =====");
+    console.log("REQ BODY:", req.body);
+
+    const {
+      email,
+      password,
+      full_name,
+      company_name,
+      company_address,
+      company_email,
+      company_phone,
+    } = req.body;
+
+    if (
+      !email ||
+      !password ||
+      !full_name ||
+      !company_name ||
+      !company_address ||
+      !company_email ||
+      !company_phone
+    ) {
+      console.log("❌ Missing required fields");
+      return err(res, 400, "Thiếu dữ liệu bắt buộc");
+    }
+
+    const code = generateVerifyCode();
+    const expires = new Date(Date.now() + 15 * 60 * 1000);
+
+    console.log("Generated verify code:", code);
+    console.log("Verify expires at:", expires);
+
+    console.log("Creating company...");
+    const company = await createCompanyFromBody(req.body);
+    console.log("Company created:", company);
+
+    console.log("Finding user by email:", email);
+    let user = await User.findOne({ email }).select("+password");
+    console.log("User found:", user);
+
+    if (user && user.is_verified) {
+      console.log("❌ Email already exists & verified");
+      return err(res, 400, "Email đã tồn tại");
+    }
+
+    if (user && !user.is_verified) {
+      console.log("Updating existing unverified user");
+
+      user.password = password;
+      user.full_name = full_name;
+      user.role = "admin";
+      user.company_id = user.company_id || company._id;
+      user.is_verified = false;
+      user.verification_code = code;
+      user.verification_expires = expires;
+
+      await user.save();
+      console.log("User updated:", user);
+    } else {
+      console.log("Creating new user");
+
+      user = await User.create({
         email,
         password,
         full_name,
-        company_name,
-        company_address,
-        company_email,
-        company_phone,
-      } = req.body;
-
-      if (!email || !password || !full_name || !company_name || !company_address || !company_email || !company_phone) {
-        return err(res, 400, "Thiếu dữ liệu bắt buộc");
-      }
-
-      const code = generateVerifyCode();
-      const expires = new Date(Date.now() + 15 * 60 * 1000);
-
-      const company = await createCompanyFromBody(req.body);
-
-      let user = await User.findOne({ email }).select("+password");
-
-      if (user && user.is_verified) {
-        return err(res, 400, "Email đã tồn tại");
-      }
-
-      if (user && !user.is_verified) {
-        user.password = password;
-        user.full_name = full_name;
-        user.role = "admin";
-        user.company_id = user.company_id || company._id;
-        user.is_verified = false;
-        user.verification_code = code;
-        user.verification_expires = expires;
-        await user.save();
-      } else {
-        user = await User.create({
-          email,
-          password,
-          full_name,
-          role: "admin",
-          company_id: company._id,
-          is_verified: false,
-          verification_code: code,
-          verification_expires: expires,
-        });
-      }
-
-      // SEND EMAIL
-      await mailFacade.sendMail({
-        toList: [user.email],
-        subject: "Mã xác nhận tài khoản",
-        html: `<p>Xin chào ${user.full_name || ""},</p>
-               <p>Mã xác nhận của bạn:</p>
-               <h2>${code}</h2>
-               <p>Hiệu lực 15 phút.</p>`,
+        role: "admin",
+        company_id: company._id,
+        is_verified: false,
+        verification_code: code,
+        verification_expires: expires,
       });
 
-      return ok(
-        res,
-        { userId: user._id, companyId: company._id },
-        "Đăng ký thành công, vui lòng kiểm tra email."
-      );
-    } catch (e) {
-      console.error("Lỗi đăng ký:", e);
-      return err(res, 400, e?.message || "Đăng ký thất bại");
+      console.log("User created:", user);
     }
-  },
+
+    console.log("Sending verification email...");
+    await mailFacade.sendMail({
+      toList: [user.email],
+      subject: "Mã xác nhận tài khoản",
+      html: `
+        <p>Xin chào ${user.full_name || ""},</p>
+        <p>Mã xác nhận của bạn:</p>
+        <h2>${code}</h2>
+        <p>Hiệu lực 15 phút.</p>
+      `,
+    });
+    console.log("✅ Email sent");
+
+    console.log("===== REGISTER SUCCESS =====");
+    return ok(
+      res,
+      { userId: user._id, companyId: company._id },
+      "Đăng ký thành công, vui lòng kiểm tra email."
+    );
+  } catch (e) {
+    console.error("🔥 REGISTER ERROR:", e);
+    return err(res, 400, e?.message || "Đăng ký thất bại");
+  }
+},
+
 
   // ⭐ REGISTER NO VERIFY
   registerNoVerify: async (req, res) => {
