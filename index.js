@@ -88,7 +88,7 @@ const { nsp } = attachGateway(io);
 
 const StrategyContext = require("./socket/strategies/StrategyContext");
 const strategyCtx = new StrategyContext(nsp);
-
+app.set("pingNsp", nsp);
 app.set("io", io);
 app.set("socketStrategy", strategyCtx);
 

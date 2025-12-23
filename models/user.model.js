@@ -31,7 +31,15 @@ const userSchema = new mongoose.Schema(
       enum: ["sys_admin", "admin", "user"],
       default: "user",
     },
+    paid_leave_used: {
+      type: Number,
+      default: 0, // tổng ngày nghỉ có lương (annual + sick)
+    },
 
+    total_leave_used: {
+      type: Number,
+      default: 0, // tổng ngày nghỉ (paid + unpaid)
+    },
     company_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Company",
@@ -89,44 +97,29 @@ const userSchema = new mongoose.Schema(
     ------------------------------------------------------------- */
     checkin_complaints: [
       {
-        date: { type: String, required: true }, // ngày chấm công
-
-        // loại khiếu nại
-        type: {
+        date: { type: String, required: true },
+        action: {
           type: String,
           enum: ["check_in", "check_out"],
           required: true,
         },
-
-        // giờ sai
-        expected_time: { type: String }, // giờ đúng đáng lẽ
-        actual_time: { type: String },   // giờ hệ thống ghi
-
-        // ảnh minh chứng
-        evidence_images: [{ type: String }],
-
-        // lý do
-        reason_type: {
-          type: String,
-          enum: ["face_fail", "system_error", "wrong_time", "wrong_user", "other"],
-          required: true,
-        },
-
-        description: { type: String, default: "" },
-
-        // trạng thái duyệt
+        time: { type: String, required: true },
+        reason: { type: String, required: true },
+        evidence_images: { type: [String], default: [] },
         status: {
           type: String,
           enum: ["pending", "approved", "rejected"],
           default: "pending",
         },
-
         admin_note: { type: String, default: "" },
-
+        approved_at: { type: Date, default: null },
         created_at: { type: Date, default: Date.now },
       },
     ],
-
+    annual_leave_used: {
+      type: Number,
+      default: 0, // tổng số ngày phép năm đã dùng
+    },
     /* -------------------------------------------------------------
        🟧 NGHỈ PHÉP
     ------------------------------------------------------------- */
@@ -139,18 +132,101 @@ const userSchema = new mongoose.Schema(
         },
         start_date: { type: String, required: true },
         end_date: { type: String, required: true },
-        reason: { type: String },
-        evidence_images: [{ type: String }],
+        day_type: {
+          type: String,
+          enum: ["full", "half_morning", "half_afternoon"],
+          default: "full",
+        },
+        reason: { type: String, required: true },
+        evidence_images: { type: [String], default: [] },
         status: {
           type: String,
           enum: ["pending", "approved", "rejected"],
           default: "pending",
         },
-        admin_note: { type: String },
+        admin_note: String,
+        approved_by: {
+          user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+          full_name: String,
+          avatar: String,
+          role: String,
+        },
+        approved_at: Date,
+        created_at: { type: Date, default: Date.now },
+      },
+    ],
+    online: { type: Boolean, default: false },
+
+    /* ---------------------------------------------------
+       💬 CHAT CÁ NHÂN
+    --------------------------------------------------- */
+    private_chats: [
+      {
+        peer_id: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        peer_name: String,
+        peer_avatar: String,
+
+        messages: [
+          {
+            from_me: { type: Boolean, default: false },
+            text: String,
+            image_urls: { type: [String], default: [] },
+            created_at: { type: Date, default: Date.now },
+            is_seen: { type: Boolean, default: false },
+          },
+        ],
+
+        last_message: String,
+        last_time: Date,
+        unread_count: { type: Number, default: 0 },
+      },
+    ],
+
+    devices: [
+      {
+        device_id: { type: String, required: true },
+        fcm_token: { type: String, required: true },
+
+        platform: {
+          type: String,
+         
+          required: true,
+        },
+
+        device_name: String,
+        app_version: String,
+
+        is_active: { type: Boolean, default: true },
+
+        last_login: { type: Date, default: Date.now },
         created_at: { type: Date, default: Date.now },
       },
     ],
 
+    notifications: [
+      {
+        _id: {
+          type: mongoose.Schema.Types.ObjectId,
+          default: () => new mongoose.Types.ObjectId(),
+        },
+
+        title: { type: String, required: true },
+        body: { type: String, required: true },
+
+        type: {
+          type: String,
+        
+          default: "system",
+        },
+
+        data: { type: Object, default: {} },
+
+        is_read: { type: Boolean, default: false },
+        read_at: { type: Date, default: null },
+
+        created_at: { type: Date, default: Date.now },
+      },
+    ],
     /* -------------------------------------------------------------
        🟩 OVERTIME (OT)
     ------------------------------------------------------------- */
