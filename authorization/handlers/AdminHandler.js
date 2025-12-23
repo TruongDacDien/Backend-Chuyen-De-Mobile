@@ -8,7 +8,8 @@ class AdminHandler extends RoleHandler {
         "MANAGE_USERS",
         "MANAGE_DEPARTMENTS",
         "VIEW_USER",
-        "MANAGE_BILLING",       // ⬅️ thêm quyền billing
+        "MANAGE_BILLING",  
+        "MANAGE_SUBSCRIPTION_PLANS"     // ⬅️ thêm quyền billing
       ];
       if (allowedActions.includes(action)) return true;
     }

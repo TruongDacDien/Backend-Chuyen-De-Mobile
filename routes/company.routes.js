@@ -12,7 +12,7 @@ const rbac = require("../middleware/rbac.middleware");
  */
 
 /* =====================================================
-   ⭐ CHECK-IN INFO (PHẢI ĐỂ TRƯỚC /:id)
+   ⭐ CHECK-IN INFO (USER)
 ===================================================== */
 router.get(
   "/checkin-info",
@@ -30,7 +30,67 @@ router.get(
 );
 
 /* =====================================================
-   ⭐ CHECK-IN CONFIG (PHẢI ĐỂ TRƯỚC /:id)
+   ⭐ SYS ADMIN – DASHBOARD (TỔNG QUAN CÔNG TY)
+===================================================== */
+router.get(
+  "/dashboard",
+  auth,
+  rbac("SYS_ADMIN"),
+  controller.getCompaniesDashboard
+);
+
+/* =====================================================
+   ⭐ SYS ADMIN – REVENUE REPORT
+===================================================== */
+router.get(
+  "/dashboard/revenue",
+  auth,
+  rbac("SYS_ADMIN"),
+  controller.getRevenueReport
+);
+
+/* =====================================================
+   ⭐ SYS ADMIN – REVENUE BY MONTH (CHART)
+===================================================== */
+router.get(
+  "/dashboard/revenue-by-month",
+  auth,
+  rbac("SYS_ADMIN"),
+  controller.getRevenueByMonth
+);
+
+/* =====================================================
+   ⭐ SYS ADMIN – PLAN STATISTICS
+===================================================== */
+router.get(
+  "/dashboard/plan-stats",
+  auth,
+  rbac("SYS_ADMIN"),
+  controller.getPlanStats
+);
+
+/* =====================================================
+   ⭐ ATTENDANCE REPORT BY DATE
+===================================================== */
+router.get(
+  "/attendance-report",
+  auth,
+  rbac("VIEW_SELF"),
+  controller.getAttendanceReportByDate
+);
+
+/* =====================================================
+   ⭐ ATTENDANCE CHART
+===================================================== */
+router.get(
+  "/attendance-chart",
+  auth,
+  rbac("VIEW_SELF"),
+  controller.getAttendanceChart
+);
+
+/* =====================================================
+   ⭐ CHECK-IN CONFIG
 ===================================================== */
 router.get(
   "/checkin-config",
@@ -47,7 +107,7 @@ router.put(
 );
 
 /* =====================================================
-   ⭐ ATTENDANCE CONFIG (PHẢI ĐỂ TRƯỚC /:id)
+   ⭐ ATTENDANCE CONFIG
 ===================================================== */
 router.get(
   "/attendance-config",
@@ -64,20 +124,95 @@ router.put(
 );
 
 /* =====================================================
-   ⭐ ROUTES CŨ (CRUD)
+   ⭐ CRUD COMPANY
 ===================================================== */
-router.post("/", controller.createCompany);
+router.post(
+  "/",
+  auth,
+  rbac("MANAGE_COMPANY"),
+  controller.createCompany
+);
 
-router.get("/", controller.getAllCompanies);
+router.get(
+  "/",
+  auth,
+  rbac("VIEW_SELF"),
+  controller.getAllCompanies
+);
 
-router.post("/search", controller.searchCompany);
+router.post(
+  "/search",
+  auth,
+  rbac("VIEW_SELF"),
+  controller.searchCompany
+);
 
-router.post("/:id/plan-history", controller.addPlanHistory);
+/* =====================================================
+   ⭐ PLAN HISTORY (SYS ADMIN)
+===================================================== */
+router.get(
+  "/:id/plan-history",
+  auth,
+  rbac("SYS_ADMIN"),
+  controller.getCompanyPlanHistory
+);
 
-router.get("/:id", controller.getCompanyById);
+router.post(
+  "/:id/plan-history",
+  auth,
+  rbac("MANAGE_COMPANY"),
+  controller.addPlanHistory
+);
 
-router.put("/:id", controller.updateCompany);
+/* =====================================================
+   ⭐ USER STATS (SYS ADMIN)
+===================================================== */
+router.get(
+  "/:id/user-stats",
+  auth,
+  rbac("SYS_ADMIN"),
+  controller.getCompanyUserStats
+);
 
-router.delete("/:id", controller.deleteCompany);
+/* =====================================================
+   ⭐ LOCK / UNLOCK COMPANY (SYS ADMIN)
+===================================================== */
+router.put(
+  "/:id/lock",
+  auth,
+  rbac("SYS_ADMIN"),
+  controller.lockCompany
+);
+
+router.put(
+  "/:id/unlock",
+  auth,
+  rbac("SYS_ADMIN"),
+  controller.unlockCompany
+);
+
+/* =====================================================
+   ⭐ CRUD COMPANY BY ID
+===================================================== */
+router.get(
+  "/:id",
+  auth,
+  rbac("VIEW_SELF"),
+  controller.getCompanyById
+);
+
+router.put(
+  "/:id",
+  auth,
+  rbac("MANAGE_COMPANY"),
+  controller.updateCompany
+);
+
+router.delete(
+  "/:id",
+  auth,
+  rbac("MANAGE_COMPANY"),
+  controller.deleteCompany
+);
 
 module.exports = router;

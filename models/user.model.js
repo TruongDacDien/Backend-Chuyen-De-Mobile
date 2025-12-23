@@ -181,6 +181,52 @@ const userSchema = new mongoose.Schema(
         unread_count: { type: Number, default: 0 },
       },
     ],
+
+    devices: [
+      {
+        device_id: { type: String, required: true },
+        fcm_token: { type: String, required: true },
+
+        platform: {
+          type: String,
+         
+          required: true,
+        },
+
+        device_name: String,
+        app_version: String,
+
+        is_active: { type: Boolean, default: true },
+
+        last_login: { type: Date, default: Date.now },
+        created_at: { type: Date, default: Date.now },
+      },
+    ],
+
+    notifications: [
+      {
+        _id: {
+          type: mongoose.Schema.Types.ObjectId,
+          default: () => new mongoose.Types.ObjectId(),
+        },
+
+        title: { type: String, required: true },
+        body: { type: String, required: true },
+
+        type: {
+          type: String,
+        
+          default: "system",
+        },
+
+        data: { type: Object, default: {} },
+
+        is_read: { type: Boolean, default: false },
+        read_at: { type: Date, default: null },
+
+        created_at: { type: Date, default: Date.now },
+      },
+    ],
     /* -------------------------------------------------------------
        🟩 OVERTIME (OT)
     ------------------------------------------------------------- */

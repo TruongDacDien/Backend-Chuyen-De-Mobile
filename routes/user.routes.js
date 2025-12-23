@@ -14,6 +14,41 @@ router.get("/timesheets/months/:userId", auth, userController.getUserTimesheetMo
 router.get("/timesheets/month-detail/:userId", auth, userController.getUserMonthTimesheetDetail);
 
 /* ======================================================
+   📱 DEVICE MANAGEMENT (IN USER CONTROLLER)
+====================================================== */
+router.post(
+  "/me/devices",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.addOrUpdateDevice
+);
+
+router.delete(
+  "/me/devices/:deviceId",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.removeDevice
+);
+
+
+/* ======================================================
+   🔔 NOTIFICATIONS (ME)
+====================================================== */
+router.get(
+  "/me/notifications",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.getMyNotifications
+);
+
+router.patch(
+  "/me/notifications/seen-all",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.seenAllNotifications
+);
+
+/* ======================================================
    USER MANAGEMENT
 ====================================================== */
 router.post("/", auth, rbac("MANAGE_USERS"), userController.createUserByAdmin);
@@ -45,15 +80,40 @@ router.post("/checkin", auth, rbac("VIEW_SELF"), userController.checkAttendance)
 router.post("/requests/leave", auth, rbac("VIEW_SELF"), userController.createLeaveRequest);
 router.get("/requests/leave/me", auth, rbac("VIEW_SELF"), userController.getMyLeaveRequests);
 router.get("/admin/requests/leave", auth, rbac("MANAGE_USERS"), userController.adminGetAllLeaveRequests);
-router.patch("/admin/requests/leave/:userId/:leaveId", auth, rbac("MANAGE_USERS"), userController.adminDecideLeaveRequest);
+router.patch(
+  "/admin/requests/leave/:userId/:leaveId",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.adminDecideLeaveRequest
+);
 
 /* ======================================================
    CHECK-IN COMPLAINTS
 ====================================================== */
-router.post("/requests/checkin-complaint", auth, rbac("VIEW_SELF"), userController.createCheckinComplaint);
-router.get("/requests/checkin-complaint/me", auth, rbac("VIEW_SELF"), userController.getMyCheckinComplaints);
-router.get("/admin/requests/checkin-complaint", auth, rbac("MANAGE_USERS"), userController.adminGetAllCheckinComplaints);
-router.patch("/admin/requests/checkin-complaint/:userId/:complaintId", auth, rbac("MANAGE_USERS"), userController.adminDecideCheckinComplaint);
+router.post(
+  "/requests/checkin-complaint",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.createCheckinComplaint
+);
+router.get(
+  "/requests/checkin-complaint/me",
+  auth,
+  rbac("VIEW_SELF"),
+  userController.getMyCheckinComplaints
+);
+router.get(
+  "/admin/requests/checkin-complaint",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.adminGetAllCheckinComplaints
+);
+router.patch(
+  "/admin/requests/checkin-complaint/:userId/:complaintId",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.adminDecideCheckinComplaint
+);
 
 /* ======================================================
    OVERTIME REQUESTS
@@ -62,7 +122,12 @@ router.post("/requests/overtime", auth, rbac("VIEW_SELF"), userController.create
 router.get("/requests/overtime/me", auth, rbac("VIEW_SELF"), userController.getMyOvertimeRequests);
 router.get("/admin/requests/pending", auth, rbac("MANAGE_USERS"), userController.adminGetPendingRequests);
 router.get("/admin/requests/overtime", auth, rbac("MANAGE_USERS"), userController.adminGetAllOvertimeRequests);
-router.patch("/admin/requests/overtime/:userId/:otId", auth, rbac("MANAGE_USERS"), userController.adminDecideOvertimeRequest);
+router.patch(
+  "/admin/requests/overtime/:userId/:otId",
+  auth,
+  rbac("MANAGE_USERS"),
+  userController.adminDecideOvertimeRequest
+);
 
 /* ======================================================
    💬 CHAT ROUTES

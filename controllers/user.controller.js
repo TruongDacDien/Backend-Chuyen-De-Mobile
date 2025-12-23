@@ -7,7 +7,7 @@ const Department = require("../models/department.model");
 const pad2 = (n) => String(n).padStart(2, "0");
 const toDateUTC = (y, m, d) => new Date(Date.UTC(y, m - 1, d));
 const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
-
+const { pushToUsers } = require("../utils/pushNotification.util");
 const dayNameFromYMD = (ymd) => {
   // ymd: "YYYY-MM-DD"
   const [Y, M, D] = ymd.split("-").map(Number);
@@ -858,6 +858,20 @@ module.exports = {
         }
 
         await peer.save();
+        try {
+          await pushToUsers({
+            userIds: [peer._id],
+            title: `💬 ${me.full_name}`,
+            body: lastMessage,
+            type: "ChatList",
+            data: {
+           
+            },
+          });
+        } catch (e) {
+          console.error("Push chat failed:", e.message);
+        }
+
 
         /* -------- 🔥 PING TOÀN SERVER -------- */
         if (req.app.get("pingNsp")) {
@@ -912,6 +926,22 @@ module.exports = {
         group.last_time = now;
 
         await department.save();
+        try {
+          const receivers = department.users.filter(
+            u => String(u) !== String(senderId)
+          );
+
+          await pushToUsers({
+            userIds: receivers,
+            title: `💬 ${req.user.full_name}`,
+            body: group.last_message,
+            type: "ChatList",
+            data: { department_id: department._id },
+          });
+        } catch (e) {
+          console.error("Push group chat failed:", e.message);
+        }
+
 
         /* -------- 🔥 SOCKET: GROUP UPDATE -------- */
         const nsp = req.app.get("pingNsp");
@@ -944,27 +974,33 @@ module.exports = {
     try {
       const { type, id } = req.body; // id = peerId | departmentId
       const userId = String(req.user.id);
-      console.log("HELLO", type)
+
       /* =========================
          PRIVATE CHAT
       ========================= */
       if (type === "user") {
         const me = await User.findById(userId);
-        if (!me) return err(res, 404, "User not found");
 
-        const chat = me.private_chats.find(
-          (c) => String(c.peer_id) === String(id)
-        );
-        if (!chat) return err(res, 404, "Chat not found");
+        if (me) {
+          const chat = me.private_chats?.find(
+            (c) => String(c.peer_id) === String(id)
+          );
 
-        chat.messages.forEach((m) => {
-          m.is_seen = true;
+          if (chat) {
+            chat.messages.forEach((m) => {
+              m.is_seen = true;
+            });
+            chat.unread_count = 0;
+            await me.save();
+          }
+        }
+
+        // ✅ DÙ CÓ / KHÔNG CÓ CHAT → VẪN OK
+        return ok(res, {
+          success: true,
+          type: "user",
+          peer_id: id,
         });
-        chat.unread_count = 0;
-
-        await me.save();
-
-        return ok(res, "Đã đánh dấu đã đọc");
       }
 
       /* =========================
@@ -972,39 +1008,54 @@ module.exports = {
       ========================= */
       if (type === "group") {
         const department = await Department.findById(id);
-        if (!department) return err(res, 404, "Department not found");
 
-        const group = department.group_chats?.[0];
-        if (!group) return err(res, 404, "Group not found");
+        if (department && department.group_chats?.[0]) {
+          const group = department.group_chats[0];
 
-        let updated = false;
-        let updatedCount = 0;
+          let updatedCount = 0;
 
-        for (const m of group.messages) {
-          const seenList = (m.seen_by || []).map(String);
-          if (!seenList.includes(userId)) {
-            m.seen_by.push(userId);
-            updated = true;
-            updatedCount++;
+          for (const m of group.messages) {
+            const seenList = (m.seen_by || []).map(String);
+            if (!seenList.includes(userId)) {
+              m.seen_by.push(userId);
+              updatedCount++;
+            }
           }
+
+          if (updatedCount > 0) {
+            await department.save();
+          }
+
+          return ok(res, {
+            success: true,
+            type: "group",
+            department_id: id,
+            updated_count: updatedCount,
+          });
         }
 
-        if (updated) {
-          await department.save();
-        }
-
+        // ❗ Không có group → vẫn OK
         return ok(res, {
-          updated,
-          updated_count: updatedCount,
-          department_id: department._id,
+          success: true,
+          type: "group",
+          department_id: id,
+          updated_count: 0,
         });
       }
 
-
-      return err(res, 400, "Type không hợp lệ");
+      // ❗ Type lạ → vẫn OK (fail-safe cho FE)
+      return ok(res, {
+        success: true,
+        message: "No action",
+      });
     } catch (e) {
       console.error("markSeen error:", e);
-      return err(res, 500, "Lỗi khi seen tin nhắn");
+
+      // ❗ LỖI SERVER → VẪN OK (đúng yêu cầu bạn)
+      return ok(res, {
+        success: true,
+        message: "Handled with error but marked as success",
+      });
     }
   },
 
@@ -1155,7 +1206,7 @@ module.exports = {
       }
 
       // -------- RANDOM PASSWORD --------
-      const rawPassword = crypto.randomBytes(6).toString("base64");
+      const rawPassword = crypto.randomBytes(6).toString("hex");
 
       // -------- TẠO USER --------
       const newUser = await User.create({
@@ -1528,8 +1579,9 @@ module.exports.checkAttendance = async (req, res) => {
   try {
     const { type, face_id, image } = req.body;
 
-    if (!["check_in", "check_out"].includes(type))
+    if (!["check_in", "check_out"].includes(type)) {
       return err(res, 400, "Loại check không hợp lệ");
+    }
 
     const user = await User.findById(req.user.id).select(
       "+face_id +location_session_token +location_session_expires +attendance_logs"
@@ -1550,67 +1602,70 @@ module.exports.checkAttendance = async (req, res) => {
     // FACE VERIFY
     const dbVec = JSON.parse(user.face_id);
     const sim = cosineSimilarity(dbVec, face_id);
-
-    if (sim < 0.45)
+    if (sim < 0.45) {
       return err(res, 400, `Face không khớp (sim=${sim.toFixed(2)})`);
+    }
 
-    // Attendance logic
+    // ===== Attendance logic =====
     const today = new Date().toISOString().split("T")[0];
-    const now = new Date();
-    const time = now.toTimeString().slice(0, 5);
+    const time = new Date().toTimeString().slice(0, 5);
 
     let logs = user.attendance_logs || [];
-    let todayLog = logs.find((l) => l.date === today);
+    let todayLog = logs.find(l => l.date === today);
 
-    // helper: tính giờ nếu đủ dữ liệu
     const calcTotalHours = (log) => {
       if (!log?.check_in_time || !log?.check_out_time) return null;
       const start = new Date(`${today}T${log.check_in_time}:00`);
       const end = new Date(`${today}T${log.check_out_time}:00`);
-      const hours = (end - start) / (1000 * 60 * 60);
-      return Math.round(hours * 100) / 100;
+      return Math.round(((end - start) / 36e5) * 100) / 100;
     };
 
-    // CHECK IN
+    // ===== CHECK IN =====
     if (type === "check_in") {
-      if (todayLog?.check_in_time)
+      if (todayLog?.check_in_time) {
         return err(res, 400, "Hôm nay đã check-in rồi");
-
-      // nếu chưa có log (hoặc đã checkout trước), tạo hoặc update vào log hiện có
-      if (!todayLog) {
-        todayLog = { date: today, created_at: now };
-        logs.push(todayLog);
       }
 
-      todayLog.check_in_time = time;
-      todayLog.check_in_image = image;
+      if (!todayLog) {
+        todayLog = {
+          date: today,
+          check_in_time: time,
+          check_in_image: image,
+        };
+        logs.push(todayLog);
+      } else {
+        todayLog.check_in_time = time;
+        todayLog.check_in_image = image;
+      }
 
-      // nếu đã checkout trước đó thì tính lại total_hours
-      todayLog.total_hours = calcTotalHours(todayLog);
+      const hours = calcTotalHours(todayLog);
+      if (hours !== null) {
+        todayLog.total_hours = hours;
+      }
     }
 
-    // CHECK OUT
+    // ===== CHECK OUT =====
     if (type === "check_out") {
-      if (todayLog?.check_out_time)
+      if (todayLog?.check_out_time) {
         return err(res, 400, "Đã check-out rồi");
-
-      // cho checkout dù chưa checkin: nếu chưa có log thì tạo mới
-      if (!todayLog) {
-        todayLog = { date: today, created_at: now };
-
-        todayLog.check_out_time = time;
-        todayLog.check_out_image = image;
-
-        // chỉ tính giờ nếu có check_in_time
-
-        logs.push(todayLog);
       }
 
-      todayLog.check_out_time = time;
-      todayLog.check_out_image = image;
+      if (!todayLog) {
+        todayLog = {
+          date: today,
+          check_out_time: time,
+          check_out_image: image,
+        };
+        logs.push(todayLog);
+      } else {
+        todayLog.check_out_time = time;
+        todayLog.check_out_image = image;
+      }
 
-      // chỉ tính giờ nếu có check_in_time
-      todayLog.total_hours = calcTotalHours(todayLog);
+      const hours = calcTotalHours(todayLog);
+      if (hours !== null) {
+        todayLog.total_hours = hours;
+      }
     }
 
     // Clear location session
@@ -1750,6 +1805,23 @@ module.exports.createLeaveRequest = async (req, res) => {
     });
 
     await user.save();
+    try {
+      const admins = await User.find({
+        company_id: user.company_id,
+        role: { $in: ["admin"] },
+        record_status: 1,
+      }).select("_id");
+
+      await pushToUsers({
+        userIds: admins.map(a => a._id),
+        title: "📄 Đơn nghỉ phép mới",
+        body: `Bạn có đơn nghỉ phép mới cần duyệt`,
+        type: "LeaveRequests",
+        data: { user_id: user },
+      });
+    } catch (e) {
+      console.error("Push leave request failed:", e.message);
+    }
     return ok(res, {}, "Tạo đơn nghỉ phép thành công");
   } catch (e) {
     return err(res, 500, e.message);
@@ -1968,6 +2040,20 @@ module.exports.adminDecideLeaveRequest = async (req, res) => {
     leave.admin_note = admin_note;
 
     await user.save();
+    try {
+      await pushToUsers({
+        userIds: [user._id],
+        title:
+          status === "approved"
+            ? "✅ Đơn nghỉ phép được duyệt"
+            : "❌ Đơn nghỉ phép bị từ chối",
+        body: admin_note || "Vui lòng xem chi tiết",
+        type: "LeaveRecord",
+        data: { leave_id: leave._id },
+      });
+    } catch (e) {
+      console.error("Push leave decision failed:", e.message);
+    }
 
     return ok(
       res,
@@ -2111,7 +2197,7 @@ module.exports.createCheckinComplaint = async (req, res) => {
       return err(res, 400, "Thiếu dữ liệu");
 
     const user = await User.findById(req.user.id).select(
-      "checkin_complaints record_status"
+      "checkin_complaints record_status company_id"
     );
     if (!user || user.record_status !== 1)
       return err(res, 404, "User không tồn tại");
@@ -2130,6 +2216,24 @@ module.exports.createCheckinComplaint = async (req, res) => {
 
 
     await user.save();
+    try {
+      const admins = await User.find({
+        company_id: user.company_id,
+        role: { $in: ["admin"] },
+        record_status: 1,
+      }).select("_id");
+      console.log("COMPANY", user)
+      await pushToUsers({
+        userIds: admins.map(a => a._id),
+        title: "⚠️ Khiếu nại chấm công",
+        body: `Bạn có khiếu nại ngày ${date}`,
+        type: "ComplaintRequests",
+        data: { user_id: user._id },
+      });
+    } catch (e) {
+      console.error("Push complaint failed:", e.message);
+    }
+
     return ok(res, {}, "Gửi khiếu nại thành công");
   } catch (e) {
     return err(res, 500, e.message);
@@ -2198,6 +2302,21 @@ module.exports.adminDecideCheckinComplaint = async (req, res) => {
   };
 
   await user.save();
+  try {
+    await pushToUsers({
+      userIds: [user._id],
+      title:
+        status === "approved"
+          ? "✅ Khiếu nại được chấp nhận"
+          : "❌ Khiếu nại bị từ chối",
+      body: admin_note || "Vui lòng xem chi tiết",
+      type: "checkin_complaint_decision",
+      data: { complaint_id: c._id },
+    });
+  } catch (e) {
+    console.error("Push complaint decision failed:", e.message);
+  }
+
   return ok(res, {}, "Đã xử lý khiếu nại");
 };
 
@@ -2390,6 +2509,25 @@ module.exports.createOvertimeRequest = async (req, res) => {
     });
 
     await user.save();
+
+    try {
+      const admins = await User.find({
+        company_id: user.company_id,
+        role: { $in: ["admin"] },
+        record_status: 1,
+      }).select("_id");
+
+      await pushToUsers({
+        userIds: admins.map(a => a._id),
+        title: "⏱️ Yêu cầu OT mới",
+        body: `Bạn có yêu cầu OT ngày ${date}`,
+        type: "OTRequest",
+        data: { user_id: user._id },
+      });
+    } catch (e) {
+      console.error("Push OT request failed:", e.message);
+    }
+
     return ok(res, {}, "Tạo phiếu OT thành công");
   } catch (e) {
     console.error("createOvertimeRequest:", e);
@@ -2626,6 +2764,21 @@ module.exports.adminDecideOvertimeRequest = async (req, res) => {
     };
 
     await user.save();
+    try {
+      await pushToUsers({
+        userIds: [user._id],
+        title:
+          status === "approved"
+            ? "✅ OT được duyệt"
+            : "❌ OT bị từ chối",
+        body: admin_note || "Vui lòng xem chi tiết",
+        type: "OTRecord",
+        data: { ot_id: ot._id },
+      });
+    } catch (e) {
+      console.error("Push OT decision failed:", e.message);
+    }
+
     return ok(res, {}, "Cập nhật phiếu OT thành công");
   } catch (e) {
     console.error("adminDecideOvertimeRequest:", e);
@@ -2734,3 +2887,140 @@ module.exports.adminGetAllOvertimeRequests = async (req, res) => {
 };
 
 
+module.exports.addOrUpdateDevice = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const {
+      device_id,
+      fcm_token,
+      platform,
+      device_name,
+      app_version,
+    } = req.body;
+
+    if (!device_id || !fcm_token || !platform) {
+      return res.status(400).json({ error: "Missing device_id / fcm_token / platform" });
+    }
+
+    // 1️⃣ đảm bảo device chỉ thuộc 1 user
+    await User.updateMany(
+      { "devices.device_id": device_id },
+      { $pull: { devices: { device_id } } }
+    );
+
+    // 2️⃣ update nếu đã tồn tại
+    const updated = await User.updateOne(
+      { _id: userId, "devices.device_id": device_id },
+      {
+        $set: {
+          "devices.$.fcm_token": fcm_token,
+          "devices.$.platform": platform,
+          "devices.$.device_name": device_name,
+          "devices.$.app_version": app_version,
+          "devices.$.is_active": true,
+          "devices.$.last_login": new Date(),
+        },
+      }
+    );
+
+    // 3️⃣ chưa có thì push mới
+    if (updated.matchedCount === 0) {
+      await User.updateOne(
+        { _id: userId },
+        {
+          $push: {
+            devices: {
+              device_id,
+              fcm_token,
+              platform,
+              device_name,
+              app_version,
+              is_active: true,
+              last_login: new Date(),
+              created_at: new Date(),
+            },
+          },
+        }
+      );
+    }
+
+    return res.json({ message: "Device registered" });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+module.exports.removeDevice = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { deviceId } = req.params;
+
+    await User.updateOne(
+      { _id: userId },
+      { $pull: { devices: { device_id: deviceId } } }
+    );
+
+    return res.json({ message: "Device removed" });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+// GET /me/notifications?page=1&limit=20
+module.exports.getMyNotifications = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 1000);
+
+    const user = await User.findById(userId)
+      .select("notifications")
+      .lean();
+
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const notifications = user.notifications || [];
+
+    // sort mới -> cũ
+    notifications.sort(
+      (a, b) => new Date(b.created_at) - new Date(a.created_at)
+    );
+
+    const total = notifications.length;
+    const unread_count = notifications.filter(n => !n.is_read).length;
+
+    const start = (page - 1) * limit;
+    const end = start + limit;
+
+    const data = notifications.slice(start, end);
+
+    return res.json({
+      page,
+      limit,
+      total,
+      unread_count,
+      data,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+// PATCH /me/notifications/seen-all
+module.exports.seenAllNotifications = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    await User.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          "notifications.$[].is_read": true,
+          "notifications.$[].read_at": new Date(),
+        },
+      }
+    );
+
+    return res.json({ message: "All notifications marked as read" });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
