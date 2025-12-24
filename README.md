@@ -1,3 +1,31 @@
+<p align="center">
+  <strong>DAI HOC QUOC GIA THANH PHO HO CHI MINH</strong><br/>
+  <strong>TRUONG DAI HOC CONG NGHE THONG TIN</strong>
+</p>
+
+<p align="center">
+  <strong>BAO CAO CHUYEN DE MOBILE AND PERVASIVE COMPUTING</strong><br/>
+  <strong>DE TAI</strong><br/>
+  <span style="color:#c00000"><strong>UNG DUNG CHAM CONG BANG NHAN DIEN KHUON MAT</strong></span>
+</p>
+
+<p align="center">
+  <em>(Logo UIT)</em>
+</p>
+
+**Giang vien huong dan:** Nguyen Tan Toan  
+**Lop:** SE405.Q11  
+**Mon hoc:** Chuyen de Mobile and Pervasive Computing  
+**Sinh vien thuc hien:**  
+- Tran Ngoc Phu - 22521107  
+- Le Quang Phuc - 22521118  
+- Truong Dac Dien - 22520248  
+- Nguyen Cong Thanh - 22521351  
+
+<p align="center"><strong>TP. Ho Chi Minh, 2025</strong></p>
+
+---
+
 # Backend Chuyen De Mobile
 API backend Express + MongoDB, tich hop thanh toan (Stripe/MoMo/ZaloPay), upload (Cloudinary), maps, email.
 
