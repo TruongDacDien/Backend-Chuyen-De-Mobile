@@ -16,94 +16,94 @@
 **Giảng viên hướng dẫn:** Nguyễn Tấn Toàn  
 **Lớp:** SE405.Q11  
 **Môn học:** Chuyên đề Mobile and Pervasive Computing  
-**Sinh viên thực hiện:**
-
-- Trần Ngọc Phú - 22521107
-- Lê Quang Phúc - 22521118
-- Trương Đắc Điền - 22520248
-- Nguyễn Công Thành - 22521351
+**Sinh viên thực hiện:**  
+- Trần Ngọc Phú - 22521107  
+- Lê Quang Phúc - 22521118  
+- Trương Đắc Điền - 22520248  
+- Nguyễn Công Thành - 22521351  
 
 <p align="center"><strong>TP. Hồ Chí Minh, 2025</strong></p>
 
 ---
 
-# TimeFace – Hướng dẫn setup môi trường
+# Backend Chuyên Đề Mobile
+API backend Express + MongoDB, tích hợp thanh toán (Stripe/MoMo/ZaloPay), tải lên (Cloudinary), bản đồ, email.
 
-Dự án dùng React Native CLI (React Native 0.78, React 19) và `npm` (đi kèm `package-lock.json`). Làm theo các bước dưới để chuẩn bị môi trường và chạy ứng dụng.
+## Quickstart
+1. Yêu cầu: Node.js 18 - 22, npm; MongoDB; (tùy chọn) Docker.  
+2. Clone repo và vào thư mục: `Backend-Chuyen-De-Mobile`
+3. Tạo file môi trường:  
+   - macOS/Linux: `cp .env.example .env`  
+   - PowerShell: `copy .env.example .env`
+4. Điền `.env` theo mẫu dưới.  
+5. Cài deps: `npm ci` (hoặc `npm install`).  
+6. Chạy server: `npm run dev` (hoặc `npm start`).  
+   - API: `http://localhost:3000/`  
+   - Swagger: `http://localhost:3000/api-docs`
 
-## 1. Yêu cầu hệ thống
+> Tip: Nếu test webhook (Stripe/MoMo/ZaloPay) cần expose callback/IPN ra internet (vd: ngrok).
 
-- Node.js ≥ 18 (khuyến nghị cài bằng nvm để dễ đổi phiên bản).
-- npm 10+ (tránh trộn Yarn để giữ đồng bộ `package-lock.json`).
-- JDK 17 và Android Studio (Ladybug/Koala) với SDK 35: Build Tools 35.0.0, Platform API 35, Platform-Tools, NDK 27.1.12297006, một emulator API 35.
-- macOS (nếu build iOS): Xcode 15+, CocoaPods ≥ 1.13, Ruby ≥ 2.6.10 (theo `Gemfile`), Bundler.
-- Công cụ hỗ trợ: Git, Watchman (macOS) để Metro ổn định.
+## .env mẫu (đầy đủ các nhóm key)
+```env
+# Core
+PORT=3000
+MONGO_URI=mongodb+srv://...
+JWT_SECRET=change-me
 
-## 2. Chuẩn bị mã nguồn
+# Cloudinary
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
 
-```sh
-git clone <url_repo>
-cd TimeFace
-npm install
+# Stripe
+STRIPE_SECRET=
+STRIPE_WEBHOOK_SECRET=
+BASE_URL=http://localhost:3000   # dùng cho stripe-success.html / stripe-cancel.html
+
+# MoMo
+MOMO_PARTNER_CODE=
+MOMO_ACCESS_KEY=
+MOMO_SECRET_KEY=
+MOMO_CREATE_ENDPOINT=
+MOMO_REDIRECT_URL=
+MOMO_IPN_URL=
+
+# ZaloPay
+ZP_APP_ID=
+ZP_KEY1=
+ZP_KEY2=
+ZP_API_BASE=https://sb-openapi.zalopay.vn
+ZP_REDIRECT_URL=
+ZP_CALLBACK_URL=
+
+# Google Maps
+GOOGLE_MAPS_API_KEY=
+
+# SMTP
+MAIL_USER=
+MAIL_PASS=
+MAIL_FROM_NAME=MyApp
+MAIL_FROM_EMAIL=
+
+# Firebase
+FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}  # json một dòng
 ```
 
-## 3. Thiết lập Android
+## Scripts hữu ích
+- `npm run dev` / `npm start`: khởi động server.
+- `npm run lint`: kiểm tra ESLint.
+- `npm run typecheck`: kiểm tra kiểu TypeScript.
+- `npm test` / `npm run test:ci`: chạy Jest.
+- `npm run build`: biên dịch TS (không tự động chạy server).
 
-- Mở Android Studio → SDK Manager và cài:
-  - Android 14 (API 35) SDK Platform.
-  - Android SDK Build-Tools 35.0.0.
-  - Android SDK Platform-Tools.
-  - NDK 27.1.12297006 (khớp với cấu hình Gradle).
-- Cấu hình biến môi trường SDK:
-  - macOS/Linux:  
-    `export ANDROID_HOME=$HOME/Library/Android/sdk` (macOS) hoặc `$HOME/Android/Sdk` (Linux)  
-    `export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH`
-  - Windows: `ANDROID_HOME=%LOCALAPPDATA%\\Android\\Sdk` và thêm `%ANDROID_HOME%\\platform-tools` vào PATH.
-- Khởi động emulator API 35 hoặc cắm thiết bị (bật USB debugging) trước khi chạy lệnh.
-
-## 4. Thiết lập iOS (chỉ macOS)
-
+## Chạy bằng Docker
 ```sh
-cd ios
-bundle install
-bundle exec pod install
-cd ..
+docker build -t backend-mobile .
+docker run --env-file .env -p 3000:3000 backend-mobile
 ```
+Container dùng `NODE_ENV=production` và chạy `npm start`. Đảm bảo `.env` đủ key trước khi run.
 
-- Nếu thiếu CocoaPods/Bundler: `sudo gem install bundler cocoapods` (đảm bảo Ruby ≥ 2.6.10).
-- Có thể mở `ios/GokuuNe.xcworkspace` trong Xcode để chọn team ký và chạy thủ công.
-
-## 5. Chạy ứng dụng
-
-Terminal 1 (Metro):
-
-```sh
-npm start
-```
-
-Terminal 2:
-
-```sh
-# Android
-npm run android
-
-# iOS (sau khi pod install, simulator đang chạy)
-npm run ios
-```
-
-- Build APK: `npm run build:android:debug` hoặc `npm run build:android:release` (cần keystore riêng cho bản phát hành).
-
-## 6. Kiểm tra chất lượng
-
-```sh
-npm run lint
-npm run typecheck
-npm test
-```
-
-## 7. Ghi chú & xử lý sự cố nhanh
-
-- Metro lỗi cache: `npm start -- --reset-cache`.
-- Android build lỗi: `cd android && ./gradlew clean` rồi chạy lại.
-- iOS cache: `watchman watch-del-all && rm -rf ~/Library/Developer/Xcode/DerivedData`.
-- Ứng dụng dùng camera (react-native-vision-camera): nhớ cấp quyền camera/micro cho thiết bị hoặc emulator.
+## Smoke test nhanh
+- GET `http://localhost:3000/` nhận string "Server running...".
+- Mở `http://localhost:3000/api-docs` xem Swagger.  
+- Nếu thiếu `MONGO_URI` server sẽ dừng ngay khi start (xem log).
