@@ -24,7 +24,7 @@ async function resolvePlanByCode(planCode) {
 async function upsertStripeCustomerForCompany(company, emailFallback) {
   const id = company.stripe_customer_id;
   if (id) {
-    try { await stripe.customers.retrieve(id); return id; } catch (_) {}
+    try { await stripe.customers.retrieve(id); return id; } catch (_) { }
   }
   const customer = await stripe.customers.create({
     name: company.name,
@@ -228,5 +228,82 @@ module.exports = {
       console.error("❌ Cancel Subscription Error:", e);
       return err(res, 500, e?.message || "Cancel subscription failed");
     }
-  }
+  },
+  cancelSubscriptionDBOnly: async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) return err(res, 401, "Unauthorized");
+
+      const user = await User.findOne({ _id: userId, record_status: 1 });
+      if (!user || !user.company_id) {
+        return err(res, 404, "User or company not found");
+      }
+
+      const company = await Company.findOne({ _id: user.company_id, record_status: 1 });
+      if (!company) return err(res, 404, "Company not found");
+
+      company.subscription_status = "canceled";
+
+      const lastPlan = company.plan_history?.at(-1);
+      if (lastPlan && !lastPlan.end_date) {
+        lastPlan.end_date = new Date();
+      }
+
+      await company.save();
+
+      return ok(
+        res,
+        {
+          company_id: company._id,
+          subscription_status: company.subscription_status,
+        },
+        "Subscription canceled in DB only"
+      );
+    } catch (e) {
+      console.error("cancelSubscriptionDBOnly error:", e);
+      return err(res, 500, "Cancel failed");
+    }
+  },
+  renewSubscriptionDBOnly: async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) return err(res, 401, "Unauthorized");
+
+      const user = await User.findOne({ _id: userId, record_status: 1 });
+      if (!user || !user.company_id) {
+        return err(res, 404, "User or company not found");
+      }
+
+      const company = await Company.findOne({ _id: user.company_id, record_status: 1 });
+      if (!company) return err(res, 404, "Company not found");
+
+      company.subscription_status = "active";
+
+      const lastPlan = company.plan_history?.at(-1);
+      if (lastPlan && lastPlan.end_date) {
+        company.plan_history.push({
+          plan: lastPlan.plan,
+          price: lastPlan.price,
+          start_date: new Date(),
+          end_date: null,
+          created_at: new Date(),
+        });
+      }
+
+      await company.save();
+
+      return ok(
+        res,
+        {
+          company_id: company._id,
+          subscription_status: company.subscription_status,
+        },
+        "Subscription renewed in DB only"
+      );
+    } catch (e) {
+      console.error("renewSubscriptionDBOnly error:", e);
+      return err(res, 500, "Renew failed");
+    }
+  },
+
 };

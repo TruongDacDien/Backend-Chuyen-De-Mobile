@@ -7,7 +7,7 @@ const deptController = require("../controllers/department.controller");
 
 // chỉ sys_admin & admin
 router.post("/", auth, rbac("MANAGE_DEPARTMENTS"), deptController.createDepartment);
-router.get("/", auth, rbac("MANAGE_DEPARTMENTS"), deptController.getAllDepartments);
+router.get("/", auth, rbac("VIEW_SELF"), deptController.getAllDepartments);
 
 // ⭐ GET detail department
 router.get("/:id", auth, rbac("MANAGE_DEPARTMENTS"), deptController.getDepartmentDetail);

@@ -237,9 +237,12 @@ module.exports = {
         .lean();
 
       if (!user || !user.company_id) {
-        return res.status(400).json({
-          error: "User chưa thuộc công ty nào",
-        });
+       
+
+
+          return res.json([]);
+
+
       }
 
       /* =========================

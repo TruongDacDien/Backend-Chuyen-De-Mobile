@@ -105,7 +105,7 @@ router.get(
 router.get(
   "/admin/requests/checkin-complaint",
   auth,
-  rbac("MANAGE_USERS"),
+  rbac("VIEW_SELF"),
   userController.adminGetAllCheckinComplaints
 );
 router.patch(
