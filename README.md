@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <em>(Logo UIT)</em>
+  <img src="https://tse3.mm.bing.net/th/id/OIP.o4oXRVly8XAYrPIodBZZ0AHaI2?pid=Api&P=0&h=220" alt="UIT logo" width="200"/>
 </p>
 
 **Giang vien huong dan:** Nguyen Tan Toan  
